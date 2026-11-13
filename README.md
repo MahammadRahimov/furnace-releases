@@ -139,6 +139,18 @@ Everything else (setup, questions, the `furnace` command) is the same on every s
   ```
 - Copy it to both servers, for example: `scp furnace_0.10.0_all.deb you@SERVER_IP:~/`
 
+**The signing key.** From v0.11.0, Hollowgate Tech signs the Furnace packages and the package repository with
+this key, so your server can check that a file really comes from us and was not changed:
+
+```
+Hollowgate Tech Furnace Packages
+F5DA 64C5 02A3 1663 B128  605E 90EA 6657 FB64 7B80   (RSA 4096, valid until 2029-11-12)
+```
+
+The public key is in the releases repository: `RPM-GPG-KEY-furnace` (for `rpm` and people) and
+`furnace-archive-keyring.gpg` (for apt). Check the fingerprint after you download it:
+`gpg --show-keys RPM-GPG-KEY-furnace`. Releases up to 0.10.0 are not signed.
+
 ### 3.2 Leader
 
 1. Install the package:
