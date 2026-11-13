@@ -1,0 +1,1538 @@
+# Furnace
+
+Furnace is a standalone blocklist server. It does not depend on one vendor.
+
+A **caller** sends an IP address or a domain to the Furnace API (Application Programming Interface). The caller can
+be a SOAR platform (Security Orchestration, Automation and Response), a script, or a UI. Furnace saves the entry and
+publishes it in a plain text list, one entry per line.
+A **list reader**, usually a firewall, downloads the list again and again and blocks what is in it. Firewalls give
+these lists different names: EDL (External Dynamic List) on Palo Alto, threat feed on Fortinet, and so on.
+
+Furnace keeps working when the caller is down. Only adding and removing stops.
+The firewall keeps downloading the lists from Furnace.
+
+The tested setup is Cortex XSOAR as the caller and a Palo Alto firewall as the list reader. The steps for them are
+in [section 15](#15-examples-palo-alto-and-cortex-xsoar). Other products work the same way: any caller that can send
+HTTPS requests, and any list reader that can download a text file over HTTPS with a user and password.
+
+**Furnace is free to use. The source code is not public.** This repository holds the released packages, the Docker
+image files, the release notes and the guides.
+
+- **Download:** the [releases page](https://github.com/MahammadRahimov/furnace-releases/releases).
+- **Deploy step by step:** the [deployment guides](docs/deploy/README.md).
+- **Report a problem or ask a question:** open an
+  [issue](https://github.com/MahammadRahimov/furnace-releases/issues). Say which version and which system you use,
+  and add the output of `sudo furnace status` (remove tokens, passwords and real IPs first).
+
+## Contents
+
+1. [How it works](#1-how-it-works)
+2. [What you need](#2-what-you-need)
+3. [Install](#3-install)
+4. [Setup questions and settings](#4-setup-questions-and-settings)
+5. [Checklist of manual work](#5-checklist-of-manual-work)
+6. [API guide](#6-api-guide)
+7. [Daily admin work (the furnace command)](#7-daily-admin-work-the-furnace-command)
+8. [Rules for IPs, domains, URLs and the whitelist](#8-rules-for-ips-domains-urls-and-the-whitelist)
+9. [The nightly cleanup and the archive](#9-the-nightly-cleanup-and-the-archive)
+10. [Two servers: leader and follower](#10-two-servers-leader-and-follower)
+11. [Files and folders](#11-files-and-folders)
+12. [Upgrade and uninstall](#12-upgrade-and-uninstall)
+13. [Tests](#13-tests)
+14. [What was not tested](#14-what-was-not-tested)
+15. [Examples: Palo Alto and Cortex XSOAR](#15-examples-palo-alto-and-cortex-xsoar)
+
+**Step-by-step deployment guides**, one for each way to deploy (packages; Docker with keepalived in the
+container; Docker with the host's own keepalived): [docs/deploy](docs/deploy/README.md).
+
+
+---
+
+## 1. How it works
+
+```
+ Analyst --> caller (SOAR, script, UI) --HTTPS API call + token--> Furnace (shared IP) --> SQLite database
+                                                                          |
+                                                                          +--> blocklist.txt  (IPs)
+                                                                          +--> domains.txt    (domains)
+                                                                          +--> urls.txt       (URLs)
+                                                                                    ^
+ List reader (firewall) --downloads every few minutes over HTTPS + login------------+
+```
+
+- The **database** (SQLite) is the master record.
+- The three text files are always rebuilt from the database after each change.
+- A new file is first written to a temporary file, then renamed. The firewall never sees half a file.
+- A file lock makes sure two changes at the same time cannot clash.
+- Every change is one database transaction. Every action is written to an audit log, also refused requests.
+- Two servers share one IP address. If the leader fails, the follower takes over the shared IP.
+- **Security:** every API call needs a token. The lists need a login (user and password). Both work from any
+  address, so no IP rules are needed. You can still limit the addresses if you want (section 4).
+  Furnace stores only hashes of tokens and passwords. An address that sends 10 wrong tokens is locked for
+  15 minutes.
+
+Technology: Linux with systemd, Python 3.9 or newer, Flask and gunicorn (bundled inside the package), SQLite in
+WAL mode (Write-Ahead Logging) with `synchronous=FULL`, nginx, keepalived and OpenSSL.
+
+**Supported systems** (tested, see [section 13](#13-tests)):
+
+| System | Versions | Package |
+|---|---|---|
+| Ubuntu | 22.04, 24.04 | `.deb` |
+| Debian | 12, 13 | `.deb` |
+| RHEL, Rocky Linux, AlmaLinux, Oracle Linux, CentOS Stream | 8, 9, 10 | `.rpm` |
+| Fedora | 41 and newer | `.rpm` |
+| Amazon Linux | 2023 | `.rpm` |
+
+SUSE is not supported (the work is parked on the branch `suse`). Both servers should run the same system.
+
+**Docker:** Furnace also comes as a Docker image, instead of the package: **two hosts, one container each**, the
+same failover with keepalived and the shared IP. See [section 3.6](#36-docker-two-hosts). To try it on one
+computer there is a test lab with both containers on one host ([section 3.7](#37-docker-test-lab-on-one-host)),
+for testing only. Kubernetes is not supported.
+
+| | Debian family (`.deb`) | Red Hat family (`.rpm`) |
+|---|---|---|
+| Host firewall | the active one: ufw or firewalld (section 3.5) | the active one: firewalld or ufw |
+| nginx site | `/etc/nginx/sites-available/furnace` | `/etc/nginx/conf.d/furnace.conf` |
+| Security layer | AppArmor (nothing to do) | SELinux: setup sets the labels (section 3.5) |
+| Python | the system's `python3` | `python3` (3.9+), or `python3.11` / `python3.12` on RHEL 8 (installed by dnf) |
+
+**Bundled libraries.** Flask, gunicorn and the small libraries they need are inside the package
+(`/usr/lib/furnace/vendor`), with exact versions checked by SHA-256. So Furnace runs the
+same on every system, and the servers never download anything from PyPI (the Python Package Index). The other side:
+a security fix in Flask or gunicorn reaches you with a new Furnace release, not with the system's own updates.
+
+## 2. What you need
+
+- Two Linux servers from the supported list (above), in the same network segment. One is enough for a lab.
+  Both should run the same system.
+- Three IP addresses in that segment: one per server and one **shared IP** (VIP, virtual IP).
+- The servers need their system's package mirror (directly, through a proxy, or a local mirror). apt installs
+  nginx, keepalived, Python and a few tools from there. Flask and gunicorn are already in the Furnace package.
+- Optional: the IP addresses of the list reader and of the caller, if you want to limit access to them.
+  By default every address may connect, and the token and the login protect Furnace.
+
+## 3. Install
+
+Short on time? The [deployment guides](docs/deploy/README.md) take you through each way to deploy, step by step.
+
+You need one file:
+- **Ubuntu and Debian:** `furnace_<version>_all.deb`, installed with `sudo apt install ./FILE`.
+- **Red Hat family, Fedora, Amazon Linux:** `furnace-<version>-1.noarch.rpm`, installed with `sudo dnf install ./FILE`.
+
+The examples below use version 0.10.0 and the `.deb`. With the `.rpm`, use `dnf` where they say `apt`.
+Everything else (setup, questions, the `furnace` command) is the same on every system.
+
+### 3.1 Get the package
+
+- **Download it** from the GitHub releases page: <https://github.com/MahammadRahimov/furnace/releases>.
+  The repository is private, so log in to GitHub first. Or, with the GitHub command line tool:
+  ```bash
+  gh release download v0.10.0 -R MahammadRahimov/furnace -p '*.deb'    # or -p '*.rpm'
+  ```
+- Copy it to both servers, for example: `scp furnace_0.10.0_all.deb you@SERVER_IP:~/`
+
+### 3.2 Leader
+
+1. Install the package:
+   ```bash
+   sudo apt install ./furnace_0.10.0_all.deb
+   ```
+   apt also installs what Furnace needs from the system: nginx, keepalived, Python and a few tools.
+   Nothing starts yet.
+2. Set it up:
+   ```bash
+   sudo furnace setup
+   ```
+   Setup asks the questions from [section 4](#4-setup-questions-and-settings). Press Enter to take the answer in
+   [brackets]. A wrong answer is explained and asked again. At the end you see all answers and confirm them.
+   Example (fake addresses):
+   ```
+   Is this server the leader or the follower? [leader]:
+   Network card name [eth0]:
+   This server's IP (the leader) [192.0.2.11]:
+   The follower server's IP: 192.0.2.12
+   Shared IP: 192.0.2.10
+   Network prefix of the shared IP (24 = 255.255.255.0) [24]:
+   Who may call the API [any]:
+   Who may download the lists [any]:
+   Most entries per list [50000]:
+   Days an IP stays blocked (permanent IPs never expire) [30]:
+   VRRP router ID (1-255) [51]:
+   SSH allowed from [any]:
+   Use SSH as a backup for the copy to the other server? [no]:
+   Let Furnace set up this server's own firewall (ufw)? [yes]:      (the firewall that is active here)
+
+     The first API token, for the system that calls the API (for example a SOAR or a script).
+   Token name [api]: soar
+
+     What may this token do? Type a box number to switch it (or several: 2 4).
+
+                      Read       Write
+       Blocklist     1 [x]    2 [x]
+       Whitelist     3 [x]    4 [x]
+
+     Box number, or Enter when done: 4          (whitelist write off: this token may only read the whitelist)
+     ...
+     Box number, or Enter when done:
+
+     Each token has its own expiry. Furnace warns 14 days before. 0 = never.
+   Token expires after how many days: 365
+   Set up Furnace with these settings? [yes]:
+   ```
+   The token questions come only on a leader that has no API token yet. The expiry has no default: type a number.
+3. Setup configures and starts everything, then runs a self-test.
+4. At the end it shows the **new secrets once**: the API token (with the name, permissions and expiry you chose)
+   and the list login (user `lists` and a password). Store them now: the token in the caller (for
+   example a SOAR credentials store), the login in the list reader (for example the firewall's EDL objects). They are not written to
+   the log, and Furnace keeps only hashes, so it cannot show them again. Lost one? Make a new one
+   ([section 7.1](#71-api-tokens-list-logins-and-the-lockout)).
+5. It writes `/root/furnace-peer-bundle.tar.gz` for the follower. It holds the certificate, the
+   replication key and the leader's settings. It is secret. You only need it if you do not use a join code
+   (next section).
+
+### 3.3 Follower
+
+The follower needs the leader's certificate and secrets. The easy way is a **join code**: nothing to copy.
+
+1. On the leader, make the code:
+   ```bash
+   sudo furnace join-code
+   ```
+   It shows a code like `FJ1-ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567`. It works **once**, for **1 hour**, and
+   only from the follower's IP. A new code replaces the old one.
+2. On the follower, install the package and run setup:
+   ```bash
+   sudo apt install ./furnace_0.10.0_all.deb
+   sudo furnace setup
+   ```
+3. Answer `follower`, then type the join code. The follower fetches the certificate and the secrets from the
+   leader over HTTPS (port 443). It takes all shared settings from the leader, so it asks only for the network
+   card.
+
+How the code is safe: the follower checks the leader's certificate against the code before it sends anything,
+so a fake server gets nothing. The secrets wait on the leader encrypted with a key made from the code, and the
+code itself never goes over the network. After 5 wrong codes the code is gone. In a settings file the code is
+`JOIN_CODE=...` (used once, never saved).
+
+**Or copy the bundle file** (for example when the leader's port 443 is not reachable from the follower yet):
+
+1. Copy `/root/furnace-peer-bundle.tar.gz` from the leader to the follower:
+   ```bash
+   # on the leader
+   sudo scp /root/furnace-peer-bundle.tar.gz you@FOLLOWER_IP:~/
+   ```
+2. On the follower, run `sudo furnace setup` and answer `follower`. Setup finds the bundle in your home folder,
+   in `/root` or in `/tmp` (or press Enter at the join code question and give the path). Then it deletes the
+   bundle.
+3. Delete the bundle copy wherever else you put it. Keep the one in `/root` on the leader only if you want to set
+   up the follower again later.
+
+### 3.4 Setup without questions
+
+For automation, give the answers in a file:
+
+```bash
+cp /usr/share/doc/furnace/config.env.example config.env
+nano config.env
+sudo furnace setup --config config.env
+```
+
+The same file works on both servers: `LEADER_IP` and `FOLLOWER_IP` name the two servers, and each server finds its
+role from its own IP. On the follower, the other settings come from the leader's bundle. Add `--bundle FILE` if
+the bundle is not in one of the usual places. (The names before 0.10.0, `THIS_IP` and `PEER_IP` with `ROLE`, still
+work; setup then suggests the new names.)
+
+`sudo furnace setup --check` shows what setup would do and changes nothing.
+
+### 3.5 What setup does
+
+- Stops at the first error (strict mode) and tells you what went wrong.
+- Checks that it runs as root on a supported system, and checks every answer.
+- Saves the answers in `/etc/furnace/setup.conf` (readable by root only, it holds the keepalived password).
+- Creates the user `furnace` (no login). Only with the SSH backup copy on: also the user `furnace-sync` (can only
+  receive replication snapshots).
+- Leader: creates a self-signed certificate (10 years, names the shared IP and both server IPs), the replication
+  SSH key and the keepalived password. Follower: copies them from the bundle. Both: the replication secret,
+  derived from the certificate key they share (so both have the same one, without copying anything new).
+- On the server that owns the shared IP: creates the first API token and the list login, if there are none yet.
+  They are in the database, so the follower gets them with the replication.
+- Writes the nginx and keepalived files from the templates in `/usr/lib/furnace/templates`.
+- Opens only the needed ports on the host firewall: HTTPS, SSH, and VRRP (protocol 112) between the servers.
+  It uses the host firewall that is **active** (running now, or switched on for the next boot), not the one that
+  is only installed:
+  - firewalld running: firewalld (also on Ubuntu, where ufw is installed too). ufw active: ufw.
+  - Both active: setup stops and explains. Every packet must pass both, so opening ports in one is not enough.
+    Turn one off (`sudo ufw disable` or `sudo systemctl disable --now firewalld`) and run setup again, or answer
+    that setup goes on without the host firewall and open the ports yourself.
+  - None active: setup asks before it turns the installed one on (SSH is allowed first). A settings file turns it
+    on only with `HOST_FIREWALL` in the file. A package upgrade never turns a firewall on and never stops for it:
+    it leaves the firewall alone and says why.
+   With firewalld it adds rich rules to the default zone and remembers them in
+  `/etc/furnace/firewalld.rules`, so it can remove them again.
+- With SELinux on (Red Hat family): labels the list folders for nginx (`httpd_sys_content_t`), the SSH backup
+  login folder for sshd (`ssh_home_t`, only when it is on) and the two keepalived scripts (`keepalived_unconfined_script_exec_t`), and turns on
+  `httpd_can_network_connect` so nginx may pass API calls to Furnace on `127.0.0.1:8081`.
+- Starts everything and runs a **self-test**: it adds the fake IP `192.0.2.123`, checks that nginx serves it in
+  `blocklist.txt`, removes it, and checks that it is gone. It also checks that the archive and the database are
+  not served, that the API refuses calls without a token, and that the lists refuse a missing or wrong login.
+  The self-test uses its own short-lived token, so it never needs your tokens.
+- Prints a summary of what worked and what you still must do by hand.
+
+**Safe to run again.** Run `sudo furnace setup` again to change an answer. The brackets show the current answers.
+It never wipes the database and never changes the tokens, the list logins or the certificate.
+The log is in `/var/log/furnace-setup.log`. It never contains secrets.
+
+### 3.6 Docker (two hosts)
+
+Instead of the package, each of the two hosts can run one Furnace container, made from the same image. One host
+is the leader, the other the follower. The container runs everything inside: the API, nginx, keepalived,
+replication, the daily backup and the nightly cleanup. There are no setup questions: the settings are in a small
+file, `.env`.
+
+```
+        list reader and caller ──► shared IP 192.0.2.10 (moves to the host that is alive)
+                                     │
+      host A 192.0.2.11              │              host B 192.0.2.12
+      container "furnace"   ─── HTTPS every 20 s ──► container "furnace"
+      (the leader)          ◄── VRRP (keepalived) ─► (the follower)
+      ./config  ./data                               ./config  ./data
+```
+
+**What you need**
+
+- Two Linux hosts (VMs or real servers) with Docker and the Docker Compose plugin (`docker compose version`).
+  1 to 2 GB of memory each is enough.
+- Both hosts **in the same network segment**: the shared IP moves between them.
+- Three IP addresses in that segment: one per host and one free one for the **shared IP**.
+- Port 443 free on both hosts (no other web server on it).
+- On VMware, the port group must allow the shared IP to move (ask your network team about "MAC address changes"
+  and "forged transmits"). Cloud networks (AWS, Azure, ...) usually do not allow a moving IP at all.
+- These open on the network and on the host firewalls. **The container never changes the host firewall:**
+
+| From | To | Port | Why |
+|---|---|---|---|
+| the list reader and the caller | the shared IP | TCP 443 | lists and API |
+| each host | the other host | TCP 443 | replication over HTTPS |
+| each host | the other host | IP protocol 112 (VRRP) | keepalived |
+
+The container uses the host network (`network_mode: host`) and gets only two extra rights, `NET_ADMIN` and
+`NET_RAW`, for keepalived. It is not privileged.
+
+**The two files.** Furnace gives you `docker/docker-compose.yml` (how to run the container; never edit it) and
+`docker/.env.example` (your settings). Both hosts use the same `docker-compose.yml`; only `.env` differs.
+
+**1. Download and load** (on both hosts). The image and the two files are on the GitHub release:
+
+```bash
+mkdir ~/furnace && cd ~/furnace
+gh release download v0.10.0 -R MahammadRahimov/furnace -p 'furnace-image-*.tar.gz' -p docker-compose.yml -p env.example
+# without gh (only when the repository is public):
+#   R=https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0
+#   curl -fLO $R/furnace-image-0.10.0.tar.gz -fLO $R/docker-compose.yml -fLO $R/env.example
+docker load -i furnace-image-0.10.0.tar.gz        # "Loaded image: furnace:0.10.0"
+mv env.example .env                              # GitHub drops the leading dot of .env.example
+```
+
+**2. Leader (host A).** In the folder, write your settings:
+
+```bash
+cd ~/furnace
+nano .env
+```
+
+Change the three IPs at the top. **The file is the same on both hosts**: each host finds its role from its own
+IP (the host that has `FURNACE_LEADER_IP` is the leader).
+
+```
+FURNACE_LEADER_IP=192.0.2.11     # host A
+FURNACE_FOLLOWER_IP=192.0.2.12   # host B
+FURNACE_SHARED_IP=192.0.2.10     # the shared IP
+```
+
+Check the settings, then start:
+
+```bash
+docker compose run --rm furnace check   # "Settings are fine: ..." or every problem at once
+docker compose up -d
+docker logs furnace                     # "Ready." and "Follower bundle: /etc/furnace/furnace-peer-bundle.tar.gz"
+```
+
+At the first start the leader makes the certificate (for the three IPs), the keepalived password, the replication
+secret and the **follower bundle** `./config/furnace-peer-bundle.tar.gz`. All of it stays in `./config`
+(keep it private: never share or copy this folder, except the bundle once to the follower).
+
+**3. Follower (host B).** The same folder, the same `docker-compose.yml` and **the same `.env`** (copy it as it
+is: nothing is swapped).
+
+The follower needs the leader's certificate and secrets. The easy way is a **join code**:
+
+```bash
+# on the leader (host A)
+docker exec furnace furnace join-code       # shows FJ1-....-....  (works once, for 1 hour, only from host B)
+
+# on the follower (host B): add the code to .env, then start
+echo 'FURNACE_JOIN_CODE=FJ1-ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567' >> .env
+docker compose up -d
+docker logs furnace                     # "fetched from the leader 192.0.2.11 with the join code" and "Ready."
+```
+
+The follower checks the leader's certificate against the code before it sends anything, and fetches the
+secrets over HTTPS. The code is then used up: you can remove the line from `.env`. A wrong or old code stops the
+follower with a clear message; make a new code on the leader.
+
+**Or copy the bundle file** (for example when host B cannot reach port 443 on host A yet). The folder `./config`
+belongs to root and is closed to normal users (on purpose), so take the bundle out of the container with
+`docker cp`. It needs no sudo:
+
+```bash
+# on the leader (host A): a copy in your home folder, readable only by you
+docker cp furnace:/etc/furnace/furnace-peer-bundle.tar.gz ~/ && chmod 600 ~/furnace-peer-bundle.tar.gz
+
+# on the follower (host B)
+mkdir -p ~/furnace/config
+scp you@192.0.2.11:furnace-peer-bundle.tar.gz ~/furnace/config/
+cd ~/furnace && docker compose up -d
+docker logs furnace                     # "taken from the leader's bundle" and "Ready."
+
+# on the leader again: delete the copy
+rm ~/furnace-peer-bundle.tar.gz
+```
+
+The follower takes the certificate and the secrets from the bundle and deletes it. Without a code or the bundle
+it stops, says what to do, and tries again by itself (so it starts as soon as the file is there).
+
+On the host, `ls -l ~/furnace` shows other owner names for `config` and `data` (for example `systemd-journal`).
+That is normal: the container's own users have numbers that mean other names on the host.
+
+**4. The first API token and the list login** (on the leader). They are shown once and never written to the
+container log. The follower gets them with the next replication.
+
+```bash
+docker exec -it furnace furnace token add soar          # asks the permission grid and the days
+docker exec -it furnace furnace edl-user add paloalto
+```
+
+**5. Try it.** `docker exec furnace furnace status` on both hosts (role, processes, replication). From another
+machine: `curl -k -u paloalto:PASSWORD https://192.0.2.10/edl/blocklist.txt` (an empty list at first; `/health`
+answers only the two hosts themselves). Then the steps in section 5 (the list reader and the caller use the
+shared IP). Test a failover (below) before you go live.
+
+**Settings** (in `.env`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `FURNACE_LEADER_IP` | (required) | the leader host's IP (the same on both hosts) |
+| `FURNACE_FOLLOWER_IP` | (required) | the follower host's IP (the same on both hosts) |
+| `FURNACE_ROLE` | found from the IP | only when one host has both IPs: `leader` or `follower` |
+| `FURNACE_JOIN_CODE` | (none) | follower only: the one-time code from `furnace join-code` on the leader |
+| `FURNACE_KEEPALIVED` | `builtin` | `external` = the host's own keepalived moves the shared IP (below) |
+| `FURNACE_SHARED_IP` | (required) | the shared IP (VIP) everyone uses |
+| `FURNACE_SHARED_IP_PREFIX` | `24` | network prefix of the shared IP |
+| `FURNACE_INTERFACE` | the card that has this host's IP | the host's network card |
+| `FURNACE_API_ALLOW_FROM` | `any` | who may call the API (every call still needs a token) |
+| `FURNACE_LISTS_ALLOW_FROM` | `any` | who may download the lists (always with the login) |
+| `FURNACE_VRRP_ROUTER_ID` | `51` | the same on both hosts, unique on the network |
+| `FURNACE_ARCHIVE_AFTER_DAYS` | `90` | days a temporary IP stays in the list |
+| `FURNACE_MAX_IPS`, `FURNACE_MAX_DOMAINS`, `FURNACE_MAX_URLS` | `50000` | most entries per list, `0` = no limit |
+| `TZ` | `UTC` | time zone of the backup (01:30) and the cleanup (02:30) |
+
+Keep the optional settings the same on both hosts. A wrong setting stops the container at start, with a message
+that names every problem. After a change in `.env`: `docker compose up -d` (it starts the container again).
+
+**Daily work** is the same `furnace` command, through `docker exec`:
+
+```bash
+docker exec furnace furnace status          # role, processes, replication, list counts
+docker exec furnace furnace token list
+docker cp ips.txt furnace:/tmp/ips.txt && docker exec furnace furnace import-ips /tmp/ips.txt
+docker logs --since 1h furnace              # what happened (no secrets in it)
+```
+
+**Failover test:** `docker stop furnace` on the leader. Within a few seconds the follower owns the shared IP and
+becomes the leader. `docker start furnace` brings the old host back as the standby (it does not take the shared
+IP back). It gets the new data with the next replication, within 20 seconds.
+
+**The host's own keepalived (`FURNACE_KEEPALIVED=external`).** Use this when the hosts already run keepalived
+for other services, and you want one keepalived per host that you look after yourself. The container then runs
+no keepalived and needs no `NET_ADMIN`/`NET_RAW` (you may remove `cap_add` from `docker-compose.yml`). The
+host's keepalived moves the shared IP, and a small notify script on the host writes the role into
+`/run/furnace/role`, which the container reads (`docker-compose.yml` mounts `/run/furnace`).
+
+Furnace gets **its own** `vrrp_instance` with its own shared IP and router ID, next to your other blocks: a
+Furnace problem moves only Furnace's shared IP, never your other services. Furnace never changes the host:
+it prints what to add, and you add it.
+
+1. In `.env` on both hosts: `FURNACE_KEEPALIVED=external`, then `docker compose up -d`.
+2. On each host: `docker exec furnace furnace host-keepalived`. It shows the commands for the two small
+   scripts (`/usr/local/sbin/furnace-notify` and `furnace-health-check`), and the block for
+   `/etc/keepalived/keepalived.conf`, already filled in for this host (card, IPs, router ID, priority,
+   password). Its `virtual_router_id` must not be used by your other blocks.
+3. `sudo systemctl restart keepalived`, then `docker exec furnace furnace status`.
+
+Until the host's keepalived writes the role, the container works as the follower and `furnace status` warns.
+If the Furnace container stops, the host's health check fails and the shared IP moves after about 15 seconds
+(the built-in keepalived moves it at once, because it stops first).
+
+**Backup:** the leader makes a daily backup in `./data/backups`. To be safe from a lost host, copy `./config` and
+`./data` somewhere else from time to time.
+
+**Upgrade:** load the new image, put the new `docker-compose.yml` in the folder (it names the new image; your
+`.env` stays), then `docker compose up -d`. The leader first, then the follower. The database is updated at
+start. Data and secrets stay in `./config` and `./data`.
+
+**Differences from the package (`.deb`/`.rpm`):**
+- No setup questions and no self-test at start. `furnace setup` and `furnace failover-test` do not exist.
+- The host firewall is not touched: open the ports in the table yourself.
+- Replication goes over HTTPS only (port 443, only from the other host, with the replication secret).
+
+### 3.7 Docker test lab on one host
+
+**For testing and learning only.** Both containers run on one computer, on a private Docker network, so there is
+no real failover (if the computer stops, both stop). It is the quickest way to see Furnace work: replication,
+failover and the API, in a few minutes. It also runs on Docker Desktop (Windows, Mac).
+
+`docker/docker-compose.lab.yml` has everything filled in: a leader (`203.0.113.11`), a follower (`.12`), the
+shared IP `203.0.113.10` and a small **client** box (`.50`) that plays the firewall and the caller. These addresses
+are a documentation range and exist only inside Docker. Nothing to change. Load the image first (step 1 of
+3.6: `furnace-image-0.10.0.tar.gz`; `docker-compose.lab.yml` is on the release too). From the folder with
+`docker-compose.lab.yml` (in the repository: `docker/`):
+
+```bash
+docker compose -f docker-compose.lab.yml up -d leader client
+docker logs furnace-leader                       # wait for "Ready."
+docker compose -f docker-compose.lab.yml create follower
+docker cp furnace-leader:/etc/furnace/furnace-peer-bundle.tar.gz bundle.tar.gz
+docker cp bundle.tar.gz furnace-follower:/etc/furnace/furnace-peer-bundle.tar.gz
+docker compose -f docker-compose.lab.yml up -d
+rm bundle.tar.gz
+docker exec furnace-leader furnace token add lab --allow all --expires-days 1   # copy the token
+docker exec furnace-leader furnace edl-user add paloalto                         # copy the password
+```
+
+Try it from the client box (`-k`: the lab does not check the certificate):
+
+```bash
+docker exec furnace-client curl -sk -H "Authorization: Bearer TOKEN" -H 'Content-Type: application/json' \
+    -d '{"ip":"198.51.100.7","reason":"lab"}' https://203.0.113.10/api/v1/ips
+docker exec furnace-client curl -sk -u paloalto:PASSWORD https://203.0.113.10/edl/blocklist.txt
+docker exec furnace-follower furnace status       # the follower has it too, within 20 seconds
+docker stop furnace-leader                        # failover: the follower takes 203.0.113.10
+docker exec furnace-client curl -sk -u paloalto:PASSWORD https://203.0.113.10/edl/blocklist.txt
+docker start furnace-leader                       # comes back as the standby
+```
+
+The lab allows blocking the documentation ranges (`FURNACE_ALLOW_TEST_RANGES`), so these examples work there.
+Remove the lab and its data: `docker compose -f docker-compose.lab.yml down -v`.
+
+## 4. Setup questions and settings
+
+Each question saves one setting in `/etc/furnace/setup.conf`. The same names are used in a settings file for
+`furnace setup --config`.
+
+| Question | Setting | Default | Meaning |
+|---|---|---|---|
+| Leader or follower? | `ROLE` | `leader` | `leader` (preferred leader, keepalived priority 150) or `follower` (priority 100). In a settings file it is found from the IPs. |
+| Network card name | `INTERFACE` | card of the default route | Name (not IP) of the card that carries this server's IP and the shared IP, for example `ens192`. See `ip -br addr`. |
+| This server's IP (the leader) | `LEADER_IP` | first IP of the card | The leader's own IP. It must be set on that card. |
+| The follower server's IP | `FOLLOWER_IP` | | The follower's own IP. Both are the same on both servers. (Before 0.10.0: `THIS_IP` and `PEER_IP`; they still work.) |
+| Shared IP | `SHARED_IP` | | The shared IP (VIP, virtual IP). Callers and list readers always use this address. |
+| Network prefix | `SHARED_IP_PREFIX` | prefix of this server's IP | For example 24 for 255.255.255.0. |
+| Who may call the API | `API_ALLOW_FROM` | `any` | `any` = every address (a token is always needed). Or IPs and ranges, comma-separated, for example a SOAR server and its engines. |
+| Who may download the lists | `LISTS_ALLOW_FROM` | `any` | `any` = every address (the list login is always needed). Or the list readers' IPs; for a firewall HA pair, list both. |
+| Most entries per list | `MAX_IPS`, `MAX_DOMAINS` | `50000` | The list reader's limit per list. Adds beyond it are refused. 0 = no limit. The question sets both; a settings file can set them apart. |
+| Days an IP stays blocked | `ARCHIVE_AFTER_DAYS` | `90` | Days a temporary IP stays in the list before the nightly job removes it. Permanent IPs and domains never expire. |
+| VRRP router ID | `VRRP_ROUTER_ID` | `51` | 1-255. Same on both servers. Must be unique in the network segment. |
+| SSH allowed from | `SSH_ALLOW_FROM` | `any` | Who may log in with SSH (people, for example admins). `any` or a list of IPs. |
+| Use SSH as a backup for the copy? | `REPLICATION_SSH_FALLBACK` | `no` | `yes` = when HTTPS does not work, the leader copies over SSH (adds the user `furnace-sync` and SSH from the other server). `no` = HTTPS only. Section 10. |
+| Set up the host firewall? | `HOST_FIREWALL` | the active one | `ufw` or `firewalld` = configure it; it must be the active one, or the only one installed when none is active (then setup turns it on). `none` = leave it alone. Not in a settings file: the active one, or `none` when no firewall is active. Both active: setup stops (use `none` and open the ports yourself). |
+| (not asked) | `KEEPALIVED_PASSWORD` | random | VRRP (Virtual Router Redundancy Protocol) password, 6-8 characters. Created on the leader. The follower gets it from the bundle. |
+
+Before 0.3.1, `API_ALLOW_FROM` was called `XSOAR_IP` and `LISTS_ALLOW_FROM` was called `FIREWALL_IP`. The old names
+still work in a settings file. Setup saves the new names.
+
+The follower takes `SHARED_IP`, `SHARED_IP_PREFIX`, `API_ALLOW_FROM`, `LISTS_ALLOW_FROM`, `MAX_IPS`, `MAX_DOMAINS`,
+`ARCHIVE_AFTER_DAYS`, `KEEPALIVED_PASSWORD`, `VRRP_ROUTER_ID` and `REPLICATION_SSH_FALLBACK` from the leader. If you change one of
+them later, run `sudo furnace setup` on both servers with the same answer.
+
+The program settings live in `/etc/furnace/furnace.env` (written by setup). They all start with `FURNACE_`:
+`FURNACE_ARCHIVE_AFTER_DAYS`, `FURNACE_MAX_IPS`, `FURNACE_MAX_DOMAINS`, `FURNACE_BACKUP_KEEP` (14),
+`FURNACE_CLEANUP_MAX_PERCENT` (20), `FURNACE_CLEANUP_MIN_SIZE` (100), `FURNACE_ALLOW_TEST_RANGES` (false).
+During the setup self-test, test ranges are allowed for a few minutes by a file only root can create,
+`/run/furnace-state/selftest`. This avoids restarting the API. A restart could make keepalived move the shared IP.
+The file is removed after the test and is ignored when it is older than 10 minutes.
+`FURNACE_LOCKOUT_FAILURES` (10) and `FURNACE_LOCKOUT_MINUTES` (15): an address that sends that many wrong tokens
+within that time is locked for that time.
+API tokens and list logins are not settings. They are in the database, as hashes only
+([section 7.1](#71-api-tokens-list-logins-and-the-lockout)).
+
+**The first API token.** Setup asks for it only on a leader that has no API token yet. The answers are used once
+and are not saved in `setup.conf`. In a settings file for `furnace setup --config`:
+
+| Question | Setting | Default | Meaning |
+|---|---|---|---|
+| Token name | `TOKEN_NAME` | `api` | 1 to 40 characters: letters, numbers, dot, dash or underscore. |
+| The permission grid | `TOKEN_ALLOW` | `all` | Comma-separated: `blocklist:read`, `blocklist:write`, `whitelist:read`, `whitelist:write`, or `all`. Write includes read. |
+| Token expires after how many days | `TOKEN_EXPIRES_DAYS` | asked without a default; `0` in a settings file | 0 to 3650. 0 = never. |
+
+## 5. Checklist of manual work
+
+Setup cannot do these things for you.
+
+### 5.1 Network access
+
+- [ ] List reader (its download source address) -> shared IP, TCP 443.
+- [ ] Caller (and any helper servers it uses, for example SOAR engines) -> shared IP, TCP 443.
+- [ ] Leader <-> follower: HTTPS (TCP 443) both ways, for replication and the health check.
+- [ ] Only with the SSH backup copy on (`REPLICATION_SSH_FALLBACK=yes`): leader <-> follower, SSH (TCP 22) both ways.
+- [ ] Leader <-> follower: VRRP (IP protocol 112) both ways, unicast.
+- [ ] The network must allow the shared IP to move between the two servers (ARP updates). In a virtual
+      environment (VMware, Hyper-V, cloud), check that MAC spoofing / IP moves are allowed for these VMs.
+- [ ] Only if you limit `LISTS_ALLOW_FROM` or `API_ALLOW_FROM`: find out which source IP each device really uses.
+
+### 5.2 The list reader (for example a firewall)
+
+- [ ] Make it trust the Furnace certificate: `/etc/furnace/tls/furnace.crt` on the leader. It is public, not secret.
+- [ ] Add the lists:
+  - IPs: `https://SHARED_IP/edl/blocklist.txt`
+  - Domains: `https://SHARED_IP/edl/domains.txt`
+  - URLs: `https://SHARED_IP/edl/urls.txt` (only if you block URLs)
+- [ ] Give it the list login: user `lists` and the password from setup (HTTP basic authentication).
+- [ ] Let it check for updates every few minutes, and use the lists in its block rules.
+- [ ] Check its limit per list. Set `MAX_IPS` to it (default 50,000). Furnace refuses new adds when a list is full
+      (`limit_reached`).
+- [ ] Furnace stores exact domains. Decide whether the reader should also match sub-domains.
+- [ ] Put the names your team must never whitelist into `/etc/furnace/whitelist-refuse.txt` on both servers
+      (optional; shared platforms like `github.io` are refused anyway).
+
+If both Furnace servers are down, the list reader keeps using the last list it downloaded.
+Palo Alto steps: [section 15.1](#151-palo-alto-firewall-list-reader).
+
+### 5.3 The caller (for example a SOAR)
+
+- [ ] Store its API token in its credentials store. Give every program its own token, with only the boxes it
+      needs ([section 7.1](#71-api-tokens-list-logins-and-the-lockout)). Note the expiry date.
+- [ ] Make it trust `furnace.crt` (see [6.10](#610-trusting-the-self-signed-certificate)).
+- [ ] Build the HTTP calls with the API guide below. Always call the **shared IP**.
+- [ ] Test with an IP from `203.0.113.0/24` first only if `FURNACE_ALLOW_TEST_RANGES=true`. In production, this is
+      `false`, so test ranges are refused with `documentation_range`. That refusal is also a good first test.
+
+Cortex XSOAR notes: [section 15.2](#152-cortex-xsoar-caller).
+
+### 5.4 After both servers are installed
+
+- [ ] Run the failover test on the leader: `sudo furnace failover-test`.
+- [ ] Check the cleanup timer runs only on the server with the shared IP: `systemctl status furnace-cleanup.timer`.
+- [ ] Keep `/root/furnace-peer-bundle.tar.gz` safe or delete it.
+
+---
+
+## 6. API guide
+
+Furnace does not need a plugin, integration or pack. The caller sends plain HTTPS requests with JSON.
+The full reference, with every endpoint, limit and answer, is in [docs/API.md](docs/API.md).
+
+### 6.1 Basics
+
+- Base address: `https://SHARED_IP` (always the shared IP, never a server's own IP).
+- Format: JSON (JavaScript Object Notation) in and out. Send `Content-Type: application/json`.
+- Authentication: the header `Authorization: Bearer <token>`. Every `/api/` call needs it.
+  - Each token has its own permissions, a grid of four boxes:
+
+    |  | Read | Write |
+    |---|---|---|
+    | **Blocklist** (`/api/v1/ips`, `/api/v1/domains`) | look up | block and unblock |
+    | **Whitelist** (`/api/v1/whitelist/...`) | list | add, remove, bulk upload |
+
+    Write includes read. A call without the needed box gets `401` with a message that names the permission.
+  - Each token has its own expiry, chosen when it is made. An expired token gets `401`
+    ("This token expired on ..."). It does not count towards the lockout.
+  - Make tokens with `sudo furnace token add NAME` ([section 7.1](#71-api-tokens-list-logins-and-the-lockout)).
+  - The full reference: [docs/API.md](docs/API.md).
+- Wrong tokens: after 10 wrong tokens in 15 minutes, the calling address is locked for 15 minutes (`429`
+  `locked`), even with a good token. A missing token does not count.
+- By default every address may call the API. If `API_ALLOW_FROM` is limited, other addresses get `403` from nginx.
+- Rate limit: 10 requests per second per caller (burst 50). Above that: `429`. Wait and try again.
+
+The curl examples below use these shell variables:
+
+```bash
+FURNACE=https://192.0.2.10          # the shared IP
+TOKEN='paste-a-token-with-blocklist-write-here'
+WL_TOKEN='paste-a-token-with-whitelist-write-here'
+CA=furnace.crt                       # the Furnace certificate file
+```
+
+### 6.2 Fields the caller should send
+
+| Field | Required | Max length | What to send |
+|---|---|---|---|
+| `ip` or `domain` | yes | - | The indicator. One IP or one exact domain. |
+| `added_by` | recommended | 100 | The analyst's name or user name (who clicked the button). |
+| `reason` | recommended | 500 | Short reason, for example "Phishing C2 server". |
+
+`incident_id` was removed in 0.8: a request that still sends it gets `400`. Put an incident number into `reason`
+if you need it.
+
+`removed_by` (optional) can be sent on DELETE as a query parameter: `?removed_by=analyst.name`.
+All of this is stored with the entry and in the audit log.
+
+### 6.3 Answers
+
+Every answer is JSON with `status` and a plain English `message`. Show `message` to the analyst.
+
+| HTTP code | `status` | Meaning |
+|---|---|---|
+| 201 | `added` | The entry is new and is now blocked (or whitelisted). |
+| 200 | `already_exists` | It was already there. Nothing changed. The old date is kept. |
+| 200 | `removed` | The entry was removed. |
+| 200 | `found` | Look-up result. |
+| 200 | `ok` | List or bulk result. |
+| 400 | `bad_request` | The body is not valid JSON, or a field has the wrong type. |
+| 401 | `unauthorized` | The token is missing or wrong, has expired, or lacks the permission for this call. `message` says which. |
+| 403 | (nginx page) | `API_ALLOW_FROM` or `LISTS_ALLOW_FROM` is limited, and the caller's IP is not on it. |
+| 404 | `not_found` | The entry is not in the list (or the address does not exist). |
+| 405 | `method_not_allowed` | Wrong HTTP method. |
+| 413 | `too_large` | The body is larger than 20 MB. |
+| 422 | `rejected` | Refused. `reason_code` says why (table below). |
+| 429 | (nginx page) | Too many requests. Slow down. |
+| 429 | `locked` | Too many wrong tokens from this address. `Retry-After` says how many seconds to wait. |
+| 503 | `rejected` + `not_leader` | You reached the standby server. Use the shared IP. |
+| 503 | `busy` | Another change is running. Try again in a few seconds. |
+| 500 | `error` | Unexpected server error. The details are only in the server log. |
+
+Reason codes for `422` (`reason_code`):
+
+| Code | Meaning |
+|---|---|
+| `missing_value` | No IP or domain was sent. |
+| `invalid_ip` | Not a valid IP address. |
+| `range_not_allowed` | A range (CIDR or a-b) was sent. Send one IP. |
+| `private_ip`, `loopback_ip`, `link_local_ip`, `shared_address_space`, `multicast_ip`, `reserved_ip`, `unspecified_ip`, `not_public`, `ipv4_mapped_not_allowed` | Not a single public IP. |
+| `documentation_range` | 192.0.2.0/24, 198.51.100.0/24 or 203.0.113.0/24, and test ranges are switched off. |
+| `whitelisted` | The IP or domain is on the whitelist. The message names the whitelist entry. |
+| `limit_reached` | The list is full (the firewall's EDL limit). |
+| `invalid_domain` | Not a valid domain name. |
+| `wildcard_not_allowed` | A wildcard like `*.example.com` was sent. |
+| `url_not_allowed` | A URL was sent. Send only the domain. |
+| `ip_not_allowed` | An IP was sent to the domain endpoint. |
+| `invalid_cidr` | Whitelist: not a valid IP or range. |
+| `range_too_wide` | Whitelist: shorter than /8 (IPv4) or /16 (IPv6). |
+| `field_too_long` | `reason` or `added_by` is too long, or not text. |
+| `invalid_permanent` | `permanent` is not `true` or `false`. |
+
+How the caller should read an answer:
+
+- `201` -> tell the analyst "blocked".
+- `200` with `already_exists` -> tell the analyst "already blocked since <date>" (it is in `message` and `entry.added_at`).
+- `422` -> show `message`. Do not retry. The input must change.
+- `503`, `429` or a network error -> retry a few times with a pause. If it still fails, tell the analyst.
+- `401` -> the token in the caller is wrong, expired or lacks a permission (see `message`). Alert its admin.
+  Do not retry: wrong tokens lead to a lockout.
+- `429` with `locked` -> fix the token, then ask the Furnace admin for `sudo furnace unlock <caller IP>`.
+
+### 6.4 Add an IP
+
+`POST /api/v1/ips` (blocklist write)
+
+```bash
+curl --cacert "$CA" -X POST "$FURNACE/api/v1/ips" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"ip":"203.0.113.45","reason":"Phishing C2 server","added_by":"analyst.one"}'
+```
+
+Optional: `"permanent": true` blocks the IP for ever. Without it (or with `false`) the IP is temporary: it leaves
+the list after `ARCHIVE_AFTER_DAYS`.
+
+Answer `201`:
+
+```json
+{"status": "added", "message": "The IP is now blocked for 90 days.",
+ "entry": {"ip": "203.0.113.45", "added_at": "2026-10-26T09:15:02Z", "added_by": "analyst.one",
+           "reason": "Phishing C2 server",
+           "permanent": false, "expires_at": "2027-01-24T09:15:02Z"},
+ "record": {"first_blocked_at": "2026-10-26T09:15:02Z", "last_blocked_at": "2026-10-26T09:15:02Z",
+            "times_blocked": 1, "added_by": "analyst.one", "reason": "Phishing C2 server"}}
+```
+
+Answer `200` when it was already there:
+
+```json
+{"status": "already_exists",
+ "message": "This IP is already blocked since 2026-10-20T08:00:00Z. Nothing changed.",
+ "entry": {"ip": "203.0.113.45", "added_at": "2026-10-20T08:00:00Z", "...": "..."}}
+```
+
+Already in the list: nothing changes, also not `permanent`. The first block decides.
+
+If the IP was blocked before (it is in the archive), it is blocked again with a new date: `201`,
+`"restored_from_archive": true`, and the archive record counts one more block.
+
+Answer `422`:
+
+```json
+{"status": "rejected", "message": "This is a private IP address. Only public IPs can be blocked.",
+ "reason_code": "private_ip"}
+```
+
+### 6.5 Remove an IP
+
+`DELETE /api/v1/ips/<ip>` (blocklist write)
+
+```bash
+curl --cacert "$CA" -X DELETE "$FURNACE/api/v1/ips/203.0.113.45?removed_by=analyst.one" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Answers: `200` `{"status": "removed", ...}` or `404` `{"status": "not_found", ...}`.
+
+### 6.6 Look up an IP or a domain
+
+`GET /api/v1/ips/<ip>` and `GET /api/v1/domains/<domain>` (blocklist read)
+
+```bash
+curl --cacert "$CA" "$FURNACE/api/v1/ips/203.0.113.45" -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{"status": "found", "message": "This IP is blocked.", "list": "active",
+ "entry": {"ip": "203.0.113.45", "added_at": "2026-10-26T09:15:02Z", "added_by": "analyst.one",
+           "reason": "Phishing C2 server", "permanent": false,
+           "expires_at": "2027-01-24T09:15:02Z"},
+ "record": {"first_blocked_at": "2026-10-26T09:15:02Z", "...": "..."},
+ "whitelisted_by": null}
+```
+
+`list` is `active` (blocked now) or `archive` (blocked before, not now). `404` means it was never blocked.
+`record` is the archive record (first and last block, times blocked). Domains answer the same way.
+`whitelisted_by` shows the whitelist entry that covers the IP, if any.
+
+```bash
+curl --cacert "$CA" "$FURNACE/api/v1/domains/bad.example.com" -H "Authorization: Bearer $TOKEN"
+```
+
+### 6.7 Add and remove a domain
+
+`POST /api/v1/domains` and `DELETE /api/v1/domains/<domain>` (blocklist write)
+
+```bash
+curl --cacert "$CA" -X POST "$FURNACE/api/v1/domains" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"domain":"bad.example.com","reason":"Malware download site","added_by":"analyst.one"}'
+
+curl --cacert "$CA" -X DELETE "$FURNACE/api/v1/domains/bad.example.com?removed_by=analyst.one" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Domains are stored in lower case. Domains never expire. They stay until someone removes them.
+Domains have no `permanent` field. Like IPs, every domain gets an archive record.
+
+### 6.7.1 Add, look up and remove a URL
+
+`POST /api/v1/urls`, `GET /api/v1/urls?url=...` (blocklist read) and `DELETE /api/v1/urls?url=...`
+(blocklist write). A URL has slashes, so it goes in the query string (URL-encoded) or in the JSON body, never in the
+path.
+
+```bash
+curl --cacert "$CA" -X POST "$FURNACE/api/v1/urls" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"url":"https://bad.example.com/login/","reason":"Phishing page","added_by":"analyst.one"}'
+
+curl --cacert "$CA" -G "$FURNACE/api/v1/urls" --data-urlencode "url=bad.example.com/login/" \
+  -H "Authorization: Bearer $TOKEN"
+
+curl --cacert "$CA" -X DELETE -G "$FURNACE/api/v1/urls" --data-urlencode "url=bad.example.com/login/" \
+  --data-urlencode "removed_by=analyst.one" -H "Authorization: Bearer $TOKEN"
+```
+
+Furnace cleans every URL into the form the firewall's URL list needs, and the answer shows it (`entry.url`):
+
+| Sent | Stored and published |
+|---|---|
+| `https://Bad.Example.com/Login/` | `bad.example.com/login/` (no `http://` or `https://`: one entry covers both) |
+| `bad.example.com` | `bad.example.com/` (the `/` stops it also matching `bad.example.com.evil.test`) |
+| `*.bad.example.com` | `*.bad.example.com/` (every subdomain, not `bad.example.com` itself) |
+| `bad.example.com/a#top` | `bad.example.com/a` (a browser never sends the `#` part) |
+
+URLs never expire, like domains. Rules: [section 8](#8-rules-for-ips-domains-urls-and-the-whitelist).
+
+### 6.8 Whitelist: add, remove, list
+
+IPs and ranges: `/api/v1/whitelist/ips`. Domains: `/api/v1/whitelist/domains`. Listing needs whitelist read,
+adding and removing need whitelist write.
+
+```bash
+# add an IP range (the field can be "entry", "cidr" or "ip")
+curl --cacert "$CA" -X POST "$FURNACE/api/v1/whitelist/ips" \
+  -H "Authorization: Bearer $WL_TOKEN" -H "Content-Type: application/json" \
+  -d '{"entry":"198.51.100.0/24","reason":"Partner network","added_by":"admin.one"}'
+
+# remove it (the slash in the range can stay as it is)
+curl --cacert "$CA" -X DELETE "$FURNACE/api/v1/whitelist/ips/198.51.100.0/24" \
+  -H "Authorization: Bearer $WL_TOKEN"
+
+# list (paged: limit up to 10000, offset)
+curl --cacert "$CA" "$FURNACE/api/v1/whitelist/ips?limit=1000&offset=0" -H "Authorization: Bearer $WL_TOKEN"
+
+# domains
+curl --cacert "$CA" -X POST "$FURNACE/api/v1/whitelist/domains" \
+  -H "Authorization: Bearer $WL_TOKEN" -H "Content-Type: application/json" \
+  -d '{"domain":"good.example.com","reason":"Company website","added_by":"admin.one"}'
+curl --cacert "$CA" -X DELETE "$FURNACE/api/v1/whitelist/domains/good.example.com" \
+  -H "Authorization: Bearer $WL_TOKEN"
+
+# check: is this IP or domain on the whitelist? (whitelist read; private IPs too)
+curl --cacert "$CA" "$FURNACE/api/v1/whitelist/check/www.good.example.com" -H "Authorization: Bearer $WL_TOKEN"
+```
+
+The check answers `whitelisted` `true` or `false` and, in `whitelisted_by`, the entry that protects the value: the
+range for an IP, the domain itself or a parent of it for a domain. Details: `docs/API.md` section 10.1.
+
+When a whitelist entry is added, Furnace removes every blocked IP or domain it covers. The answer lists them in
+`removed_from_blocklist`, and the blocked URLs it covers in `urls_removed_from_blocklist`. Each removal is in the
+audit log.
+
+### 6.9 Bulk upload (whitelist, and blocked IPs, domains and URLs)
+
+`POST /api/v1/whitelist/ips/bulk` and `POST /api/v1/whitelist/domains/bulk` (whitelist write, also for `dry_run`).
+Up to 200,000 entries per request. Use `dry_run` first to see what would happen.
+
+```bash
+# JSON
+curl --cacert "$CA" -X POST "$FURNACE/api/v1/whitelist/ips/bulk" \
+  -H "Authorization: Bearer $WL_TOKEN" -H "Content-Type: application/json" \
+  -d '{"entries":["198.51.100.0/24","203.0.113.0/25","192.0.2.7"],"dry_run":true,
+       "reason":"Partner ranges","added_by":"admin.one"}'
+
+# or a plain text file, one entry per line (# comments allowed)
+curl --cacert "$CA" -X POST "$FURNACE/api/v1/whitelist/ips/bulk?dry_run=true&added_by=admin.one" \
+  -H "Authorization: Bearer $WL_TOKEN" -H "Content-Type: text/plain" --data-binary @whitelist.txt
+```
+
+Answer `200`:
+
+```json
+{"status": "ok", "message": "2 entries would be added. 1 entries would be rejected. 1 blocked IPs and 0 blocked URLs would be removed.",
+ "dry_run": true, "received": 3, "added": 2, "already_exists": 0,
+ "rejected": [{"value": "10.0.0.0/4", "reason_code": "range_too_wide", "message": "..."}],
+ "removed_from_blocklist": ["203.0.113.45"], "urls_removed_from_blocklist": []}
+```
+
+Bulk upload is all in one transaction. Bad lines are skipped and listed. Good lines are added.
+
+**Blocked IPs and domains from a file:** `POST /api/v1/ips/bulk` and `POST /api/v1/domains/bulk` (blocklist write).
+The same rules as `sudo furnace import-ips` and `import-domains` ([section 7.2](#72-import-ips)): dates, header and
+comment lines, the whitelist, the archive, a backup first, all or nothing, and `MAX_IPS`. Options in the query
+string: `dry_run`, `permanent`, `old_ips`, `date_format`, `reason`, `added_by`. Details: [docs/API.md](docs/API.md).
+
+```bash
+curl --cacert "$CA" -X POST "$FURNACE/api/v1/ips/bulk?dry_run=true" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: text/plain" --data-binary @blocklist.csv
+```
+
+**Blocked URLs from a file:** `POST /api/v1/urls/bulk` (blocklist write), the same as `sudo furnace import-urls`.
+One URL per line, optionally followed by a space or a tab and a reason (`https://bad.example.com/x phishing`).
+A URL can have commas and semicolons, so they do not split a line. Options: `dry_run`, `reason`, `added_by`.
+
+### 6.10 Trusting the self-signed certificate
+
+Do **not** switch off certificate checks ("insecure", "trust any certificate"). Trust the Furnace certificate
+instead. It is the same certificate on both servers and names the shared IP.
+
+1. Get the certificate: `/etc/furnace/tls/furnace.crt` on the leader. It is public, not secret.
+2. Check its fingerprint on the server and on the copy you received:
+   `openssl x509 -in furnace.crt -noout -fingerprint -sha256`
+3. Give it to the program that makes the call:
+   - curl: `--cacert furnace.crt`
+   - Python requests: `requests.post(url, ..., verify="/path/to/furnace.crt")`
+   - Linux trust store: copy to `/usr/local/share/ca-certificates/furnace.crt` and run `update-ca-certificates`.
+   - A SOAR platform: add it as a trusted custom certificate for the server or engine that makes the call
+     (Cortex XSOAR: [section 15.2](#152-cortex-xsoar-caller)).
+
+The certificate is valid for 10 years.
+
+**Make a new certificate** (when the server IPs changed, or when `furnace status` says the certificate has an
+extension twice):
+
+1. On the leader: `sudo rm -r /etc/furnace/tls`, then `sudo furnace setup`. It makes a new certificate and a new
+   follower bundle `/root/furnace-peer-bundle.tar.gz`.
+2. Copy the bundle to the follower. There: `sudo rm -r /etc/furnace/tls`, then `sudo furnace setup`.
+3. Give the new `furnace.crt` to everything that trusts the old one: the firewall (section 15.1), the SOAR
+   platform and the scripts. Until then they refuse the Furnace server.
+
+The new key also gives a new replication secret. Both servers get it from the same key, so nothing else changes.
+
+### 6.11 Health check
+
+`GET /health` needs no token. nginx allows it only from the servers themselves (localhost and the two server
+IPs). Callers and list readers cannot reach it. It is for keepalived and the admins.
+
+```json
+{"status": "ok", "version": "0.10.0", "role": "leader", "ips": 1234, "domains": 56}
+```
+
+---
+
+## 7. Daily admin work (the furnace command)
+
+Run `furnace` with sudo on the server that owns the shared IP. `sudo furnace help` lists all commands.
+The data commands run as the `furnace` user. A file to import that this user cannot read (for example in
+`/root`) is copied to a temporary folder first, so any path works.
+
+```bash
+sudo furnace status                     # role, shared IP, services and counts; exit code 1 if something is wrong
+```
+
+```bash
+sudo furnace stats                       # counts, dates, sizes, role
+sudo furnace rebuild                     # rebuild blocklist.txt, domains.txt and archive.csv from the database
+sudo furnace backup [--keep N]           # SQLite backup, keeps the newest N (default 14)
+sudo furnace cleanup --dry-run           # which temporary IPs the nightly job would remove
+sudo furnace cleanup [--force]           # run it now (--force skips the safety stop)
+sudo furnace export ips -o /tmp/ips.csv  # also: ips-archive, domains, domains-archive, urls, urls-archive,
+                                        # whitelist-ips, whitelist-domains (these can be uploaded again,
+                                        # section 7.4), archive (all three types, read only), audit
+sudo furnace check-config                # show the settings (no secrets)
+```
+
+### 7.1 API tokens, list logins and the lockout
+
+API tokens and list logins are in the database. Furnace keeps only a hash (SHA-256 for tokens, SHA-512 crypt for
+passwords). A new token or password is shown **once**. Lost one? Make a new one with `rotate`.
+Changes run on the leader. The follower gets them with the next replication (within 20 seconds).
+Every change is in the audit log, with the admin's name, never with the secret.
+
+```bash
+sudo furnace token list                       # permissions, expiry, last use and a short id, never the tokens
+sudo furnace token add soar                   # asks the permission grid and the expiry, then shows the token
+sudo furnace token add soar --allow blocklist:write,whitelist:read --expires-days 365   # the same, for scripts
+sudo furnace token edit soar                  # change the boxes or the expiry; the token value stays
+sudo furnace token rotate soar                # a new value; the old one stops working at once
+sudo furnace token remove soar                # it stops working at once
+
+sudo furnace edl-user list                    # the list logins (names only)
+sudo furnace edl-user add firewall-2          # a new login with a random password
+sudo furnace edl-user rotate lists            # a new password; give it to the list reader
+sudo furnace edl-user remove firewall-2
+
+sudo furnace lockouts                         # addresses locked after too many wrong tokens
+sudo furnace unlock 198.51.100.20             # unlock one address (or: --all)
+```
+
+`token add` without options asks, like setup:
+
+```
+  What may this token do? Type a box number to switch it (or several: 2 4).
+
+                   Read       Write
+    Blocklist     1 [x]    2 [x]
+    Whitelist     3 [x]    4 [ ]
+
+  Box number, or Enter when done:
+
+  Expires after how many days? (0 = never): 365
+```
+
+- **Permissions:** a number switches a box. Ticking Write also ticks Read. Switching Read off also switches Write
+  off. At least one box must be ticked. `--allow` takes the same as a list: `blocklist:read`, `blocklist:write`,
+  `whitelist:read`, `whitelist:write`, or `all`.
+- **Expiry:** each token has its own, from 0 to 3650 days (0 = never). There is no default: you choose it for
+  every token. `token rotate` starts the same number of days again (or give `--expires-days`). `token edit`
+  counts new days from now.
+- **Warnings:** a token that expires within 14 days, or has expired, is shown with `WARNING` in
+  `sudo furnace status` and in the nightly cleanup log (`journalctl -u furnace-cleanup`). `token list` shows
+  `EXPIRED` for it. Rotate it before the date and give the new value to the program.
+- **Last use:** `token list` shows when each token was last used (at most once an hour, on the leader).
+- Without a terminal (a script, `ssh host sudo furnace ...`), `token add` needs both `--allow` and `--expires-days`.
+
+Give every program its own token (for example `soar` and, later, `ui`), with only the boxes it needs. Then you can
+replace or delete one without touching the others. The audit log shows which token made each change
+(`source` = `api:NAME@IP`).
+
+The lockout is kept on each server and is not replicated. `furnace unlock` works on the server where you run it,
+so run it on the server that owns the shared IP.
+
+A database backup also runs every day at 01:30 (`furnace-backup.timer`).
+
+### 7.2 Import IPs
+
+```bash
+sudo furnace import-ips /tmp/old-list.csv --dry-run     # check first, change nothing
+sudo furnace import-ips /tmp/old-list.csv
+```
+
+- Line formats: `ip`, `ip,date` or `ip,date,reason`.
+- Separators: comma, semicolon, tab or spaces.
+- Header lines, blank lines and comment lines (`#`, `;`, `//`) are skipped.
+- Dates: `2026-05-20`, `2026-05-20 08:30:00`, ISO 8601 (`2026-05-20T08:30:00Z`), `2026/05/20`, `20.05.2026`,
+  `20 May 2026`, Unix time in seconds or milliseconds, and `dd/mm/yyyy` or `mm/dd/yyyy`.
+  - A date like `05/06/2026` is never guessed. If another line in the file shows the order (for example
+    `25/05/2026`), Furnace uses that order. Otherwise the line is skipped as `ambiguous_date`.
+  - Or give the format: `--date-format "%d/%m/%Y"`.
+- Real dates from the file are kept.
+- IPs with a date older than `ARCHIVE_AFTER_DAYS` go only into the archive (they were blocked, not now).
+  With `--old-ips fresh` they go into the active list with a new date instead. Their expiry is spread out, like
+  undated IPs, so they do not all expire on the same night.
+- IPs with no date get their expiry spread evenly over the next `ARCHIVE_AFTER_DAYS` days.
+- `--permanent` blocks every IP of the file permanently. Dates are kept, nothing is too old.
+- Every added IP gets an archive record. An IP already in the archive counts one more block.
+- Skipped lines (invalid, private, whitelisted, duplicate, already active, bad date) are written with their reason
+  to a report file in `/var/lib/furnace/reports/` (or `--report FILE`).
+- Every import takes a database backup first and is all or nothing.
+- If the result would be larger than `MAX_IPS`, the import stops and changes nothing.
+- 30,000 lines take about 2 seconds.
+
+### 7.3 Import domains, URLs and whitelists
+
+```bash
+sudo furnace import-domains /tmp/domains.txt [--dry-run]            # domain or domain,reason
+sudo furnace import-urls /tmp/urls.txt [--dry-run]                  # url, or url and a reason after a space
+sudo furnace import-whitelist-ips /tmp/wl-ips.txt [--dry-run]       # IPs and CIDR ranges
+sudo furnace import-whitelist-domains /tmp/wl-domains.txt [--dry-run]
+```
+
+### 7.4 Export and move to a new server
+
+Every list can be exported, and the exported file can be uploaded again, on the same server or on a new one.
+The entries keep their dates, who added them, the reason, the permanent flag and the archive history.
+
+| List | What is in it | Upload it again with |
+|---|---|---|
+| `ips` | Blocked IPs now: date, by, reason, permanent, and `counted_from` (the date its days count from) | `/api/v1/ips/bulk` or `furnace import-ips` |
+| `ips-archive` | Every IP ever blocked: first and last block, times blocked, blocked now | the same |
+| `domains`, `domains-archive` | Blocked domains now, and every domain ever blocked | `/api/v1/domains/bulk` or `furnace import-domains` |
+| `urls`, `urls-archive` | Blocked URLs now, and every URL ever blocked | `/api/v1/urls/bulk` or `furnace import-urls` |
+| `whitelist-ips`, `whitelist-domains` | The whitelist | `/api/v1/whitelist/ips/bulk` and `/api/v1/whitelist/domains/bulk`, or `furnace import-whitelist-ips` / `-domains` |
+
+Export on the server (`sudo furnace export ips -o ips.csv`) or through the API
+(`GET /api/v1/export/ips`, see `docs/API.md` section 12a). Both give the same file. It starts with a marker line:
+
+```
+# furnace-export ips v1
+# Furnace 0.10.0, exported 2026-11-03T10:00:00Z. Upload it again with /api/v1/ips/bulk or furnace import-ips.
+ip,added_at,added_by,reason,permanent,counted_from
+203.0.113.5,2026-10-01T10:00:00Z,soar,phishing,no,2026-10-01T10:00:00Z
+```
+
+The importers look for that marker. With it, they read every column by name. Without it, a file is read as
+before (`ip,date,reason`), so lists from other sources work as they always did.
+
+**Move to a new server:**
+
+1. On the old server: export the eight lists (or call the API with a token that has blocklist read and
+   whitelist read).
+2. Install Furnace on the new server and run `sudo furnace setup` (new tokens, list logins and certificate:
+   they are secrets and are never exported).
+3. Upload the files in this order: **whitelist first** (`whitelist-ips`, `whitelist-domains`), then
+   `ips`, `domains`, `urls`, then the three archives. A dry run (`--dry-run` or `dry_run=true`) shows the result
+   first.
+
+What happens on upload:
+
+- The normal rules still apply: a database backup first, all or nothing, the whitelist, the list limits. Bad
+  rows are skipped and listed in the report.
+- An IP keeps its date, so its days go on from where they were. An IP whose time is over goes to the archive
+  only. A permanent IP stays permanent.
+- An archive upload restores the history. It never blocks anything: what is blocked now comes from `ips`,
+  `domains` and `urls`. When an entry is already in the archive, the earliest first block, the latest last block
+  and the higher count are kept.
+- Uploading the same file twice changes nothing the second time.
+- A file of the wrong list (an `ips` export sent to the domain upload, for example), a missing column or an
+  unknown format is refused, and nothing changes. The upload options `permanent`, `old_ips` and `date_format`
+  cannot be used with an export file (the file has its own dates and flags).
+- Opened and saved in a spreadsheet? That works too: semicolons, other date forms and extra columns are read.
+  Do not delete the marker line. A date the spreadsheet made unclear (`03/04/2026`) skips that row (in the
+  report).
+
+Not exported: tokens, list logins, the certificate and the audit log (`sudo furnace export audit` stays
+for reading on the server only).
+
+## 8. Rules for IPs, domains, URLs and the whitelist
+
+**IPs**
+- Single public IPs only (IPv4 and IPv6).
+- Refused: ranges, private, loopback, link-local, shared (100.64.0.0/10), multicast, reserved.
+- The documentation ranges 192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24 are refused unless
+  `FURNACE_ALLOW_TEST_RANGES=true` (tests and the setup self-test only).
+- Refused when on the whitelist.
+- Temporary (default): leaves the list after `ARCHIVE_AFTER_DAYS`. Permanent (`"permanent": true`): never expires,
+  only an unblock removes it.
+- Already active: nothing changes (also not temporary or permanent), the old date is kept, and the answer says so.
+- In the archive and added again: back in the list with a new date.
+- Stored for each IP: date added, who added it, reason, temporary or permanent.
+- `furnace status` warns when permanent IPs fill half of `MAX_IPS`, because they never leave the list.
+
+**Domains**
+- Exact domains only. Refused: wildcards, URLs, IPs, invalid names. Stored in lower case.
+  Non-ASCII names are stored as punycode (`xn--...`).
+- No expiry: a domain stays until someone removes it.
+- Refused when the domain or a parent of it is on the domain whitelist: whitelisting `example.com` protects
+  `www.example.com` and every other subdomain too.
+
+**URLs**
+- The form of a firewall URL list: `host[:port]` and an optional path and query. `http://` and `https://` are
+  removed (one entry covers both); other schemes (`ftp://`) are refused. Stored in lower case, without `#...`.
+  A host alone gets a `/` at the end.
+- Wildcards: `*` (one or more parts) and `^` (exactly one part), as whole parts only. Parts are separated by
+  `. / ? & = ; +`. `*.bad.example.com/` is fine; `*bad.example.com/` is refused (`wildcard_partial`).
+- Too wide wildcards are refused (`wildcard_too_wide`): the last two parts of the host must be written out
+  (`*.com/`, `example.*/` and `bad.*.com/` are refused), three under a country's public names (`*.co.uk/`,
+  `*.com.az/` are refused, `*.example.co.uk/` is fine). A wildcard may also not cover a shared platform or a
+  public name from the Public Suffix List (the same list the whitelist uses): `*.github.io/`, `*.blogspot.com/`
+  and `*.amazonaws.com/` are refused, `*.bad.github.io/` is fine.
+- IPv4 hosts are allowed (public only, like the IP list). IPv6 hosts, `user@host` and non-ASCII paths are refused.
+  Send a non-ASCII path percent-encoded. At most 255 characters.
+- No expiry: a URL stays until someone removes it or the whitelist covers it. Every URL gets an archive record.
+- **The whitelist protects by host:** a domain on the domain whitelist protects itself and all its subdomains.
+  With `good.example.com` on the whitelist, `good.example.com/x`, `www.good.example.com/` and `*.good.example.com/`
+  are refused, and also wildcards that cover it, like `*.example.com/`. `example.com/` (the parent) is allowed.
+  A URL with an IP host is checked against the IP whitelist.
+- **Paths need SSL decryption** on the firewall for HTTPS sites. Without it the firewall sees only the host name,
+  so only host entries (`bad.example.com/`, `*.bad.example.com/`) work for HTTPS.
+
+**Whitelist**
+- IPs and CIDR (Classless Inter-Domain Routing) ranges, and domains.
+- Ranges shorter than /8 (IPv4) or /16 (IPv6) are refused. A range protects every IP in it (and URLs with those IPs).
+- Adding an entry removes the blocked IPs, domains and URLs it covers, with an audit entry. Removing it later does
+  not block them again.
+
+**What the domain whitelist does and what it refuses** (user decisions 2026-11-02):
+
+- A domain on the whitelist protects **itself and all its subdomains**, in the domain list and in the URL list.
+  With `x.example.com` on the whitelist: the domains `x.example.com`, `mail.x.example.com` and `a.b.x.example.com`
+  and the URLs `x.example.com/...`, `www.x.example.com/...` and `*.x.example.com/` cannot be blocked, and adding the
+  whitelist entry removes the ones already blocked. The parent `example.com` and look-alikes such as
+  `notx.example.com` or `x.example.com.evil.test` are not touched.
+- **Shared platforms and public names cannot be whitelisted** (`whitelist_not_allowed`). Anyone can make a site
+  under them, so whitelisting one would protect attackers' sites too. Furnace uses the **Public Suffix List**
+  (publicsuffix.org, the list browsers use; a copy comes with each Furnace release, no internet needed):
+
+  | Whitelist request | Result |
+  |---|---|
+  | `github.io`, `blogspot.com`, `cloudfront.net`, `azurewebsites.net`, `vercel.app`, `herokuapp.com`, `pages.dev` | refused: a shared platform |
+  | `co.uk`, `com.az`, `gov.az` | refused: a public name |
+  | `amazonaws.com`, `windows.net` | refused: they cover a shared platform (`s3.amazonaws.com`, `blob.core.windows.net`) |
+  | `company.github.io`, `example.co.uk`, `yourcompany.com`, `google.com`, `microsoft.com`, `github.com` | allowed |
+
+- **Your own names** go into `/etc/furnace/whitelist-refuse.txt` (one per line, `#` comments; setup makes it
+  once, empty, and never changes it). A name there is refused, and so is every name that would cover it:
+  `drive.google.com` in the file also refuses `google.com`. Use it for services that host anyone's files under a
+  path, which the Public Suffix List cannot know (`dropbox.com`, `drive.google.com`). Keep the file the same on both
+  servers.
+- Whitelist entries made before 0.8 stay. `furnace status` warns about the ones that would be refused today.
+- Look-ups use merged, sorted ranges and binary search. Checking 30,000 IPs against thousands of ranges takes
+  milliseconds.
+
+## 9. The nightly cleanup and the archive
+
+Furnace keeps two lists:
+
+- **The EDL lists** (`blocklist.txt`, `domains.txt`, `urls.txt`): what is blocked now.
+- **The archive**: a record of every different IP, domain and URL that was ever blocked. One row each, never a
+  duplicate, never removed. It is written when an IP or domain is blocked for the first time. The row keeps the
+  first details (date, who, reason), the last block date and how many times it was blocked.
+  Expiry, unblock and the whitelist remove an entry only from the EDL list, never from the archive.
+
+The nightly cleanup:
+
+- `furnace-cleanup.timer` runs every night at 02:30, only on the server that owns the shared IP.
+- It removes temporary IPs older than `ARCHIVE_AFTER_DAYS` from the list in one transaction and rebuilds
+  `blocklist.txt`. Permanent IPs and domains are never removed.
+- It rewrites `/var/lib/furnace/archive/archive.csv` (IPs and domains, with `blocked_now` yes or no). Imports and
+  `furnace rebuild` write it too. `sudo furnace export archive` always gives the current state.
+- The archive CSV is only storage. It is not an EDL. nginx never serves it.
+- **Safety stop:** if one run would remove more than 20 percent of the list, and the list has at least 100 IPs,
+  the job changes nothing, writes an audit entry and exits with code 3. systemd marks the run as failed.
+  Check the dates. If the removal is correct, run `sudo furnace cleanup --force`.
+- `sudo furnace cleanup --dry-run` shows which IPs would be removed.
+- Logs: `journalctl -u furnace-cleanup`.
+
+## 10. Two servers: leader and follower
+
+- keepalived holds the **shared IP** on the current leader. It uses unicast VRRP between the two servers.
+- Both servers use state `BACKUP` with `nopreempt`. A server that comes back does **not** take the IP back.
+  Priority 150 is the preferred leader at the very first start, 100 is the follower.
+- keepalived calls `/health` every 5 seconds. After 3 failures the IP moves, even if the machine is still alive.
+  `/health` fails when nginx or the API is stopped or hangs, when the database cannot be read, when an EDL file
+  is missing, and when the disk is full. Tested in a lab: the follower takes over in about 15 seconds and the
+  firewall keeps getting the list.
+- The health check does **not** fail on an expired certificate. Both servers share one certificate, so it would
+  fail on both at the same moment and nobody would hold the shared IP. Watch the daily certificate warnings instead.
+- If keepalived itself crashes, systemd starts it again within 2 seconds
+  (`/etc/systemd/system/keepalived.service.d/furnace.conf`). At start it drops the shared IP and joins as the
+  standby, so the IP is never left on both servers.
+- When a server takes the shared IP, the notify script marks it as leader and starts the cleanup timer.
+  When it loses the IP, it marks it as follower and stops the timer.
+- **Replication:** every 20 seconds the leader makes a SQLite backup snapshot and sends it over HTTPS to
+  `https://OTHER_SERVER_IP/replica/snapshot`, with the replication secret both servers share. nginx lets only the other
+  server reach this address. The follower checks the secret, loads the snapshot, rebuilds its EDL files and
+  answers at once, so the leader knows that it worked. `sudo furnace status` on the leader shows the last result.
+- **SSH backup copy (optional, off by default since 0.10.0).** With `REPLICATION_SSH_FALLBACK=yes` (the setup
+  question "Use SSH as a backup for the copy to the other server?"), the leader pushes the snapshot over SSH when
+  HTTPS does not work. It uses a dedicated key that can only run the receive command, as the user `furnace-sync`.
+  `furnace status` then warns that HTTPS does not work, so the backup never hides a problem. Off, there is no
+  `furnace-sync` user and no SSH between the servers: when HTTPS does not work, the copy fails and
+  `furnace status` says so. Docker has no SSH backup (HTTPS only).
+  Turn it on or off: `sudo furnace setup` on **both** servers with the same answer.
+- The follower refuses all changes while it is not the leader (`503 not_leader`).
+
+### 10.1 Risks
+
+- **Split brain.** If the two servers cannot see each other but both are alive, both take the shared IP.
+  Each one accepts changes, and neither takes snapshots from the other. When the link comes back, one keeps the IP.
+  Changes made on the other server during the split are overwritten by the next snapshot. Check the audit log of
+  both servers after a network problem. Keep VRRP and HTTPS between the servers on a reliable path.
+- **Up to 20 seconds of lost changes.** If the leader dies, changes from its last 20 seconds may not have reached the
+  follower. The caller got a success answer for them. Ask analysts to re-click after a failover, or check the audit log.
+  The duplicate rule makes a re-click harmless.
+- **Both servers down.** The firewall keeps the last list it downloaded and keeps blocking. New blocks are not
+  possible until a server is back.
+- Replication sends the whole database every 20 seconds. For large audit logs, this is more network traffic.
+
+### 10.2 Failover test
+
+Run it on the server that owns the shared IP:
+
+```bash
+sudo furnace failover-test        # stops keepalived here (like a dead machine)
+sudo furnace failover-test --web  # stops nginx here (the web service breaks)
+```
+
+It stops the service on purpose, waits for the other server to take the shared IP, checks that it answers on the
+shared IP as the leader, and then starts the service again. Afterwards the other server stays the leader.
+
+## 11. Files and folders
+
+| Path | What |
+|---|---|
+| `/usr/bin/furnace` | The command. |
+| `/usr/lib/furnace/` | The program, setup, templates and helper scripts (keepalived, replication, failover test). |
+| `/usr/lib/furnace/vendor/` | The bundled libraries: Flask, gunicorn and what they need. |
+| `/usr/lib/furnace/bin/furnace-python` | Starts Python 3.9+ with Furnace and the bundled libraries. Every Furnace service uses it. |
+| `/lib/systemd/system/furnace-*` | The systemd units. |
+| `/etc/furnace/setup.conf` | Your setup answers. Readable by root only. |
+| `/etc/furnace/furnace.env` | Program settings (no secrets). |
+| `/etc/furnace/tls/` | Certificate and private key. |
+| `/etc/furnace/whitelist-refuse.txt` | Your own names that may never be whitelisted (optional, the same on both servers). |
+| `/usr/lib/furnace/furnace/public_suffix_list.dat` | The Public Suffix List (shared platforms and public names), MPL 2.0, updated with each release. |
+| `/etc/furnace/secrets/replica-secret` | The replication secret (from the certificate key). Root and the furnace group. |
+| `/etc/furnace/ssh/` | The SSH key for the SSH backup copy. It opens nothing while the backup is off (no login accepts it). |
+| `/var/lib/furnace/furnace.db` | The database (master record), with the API tokens and list logins as hashes. |
+| `/var/lib/furnace/lockout.db` | Addresses locked after wrong tokens (this server only). |
+| `/var/lib/furnace-auth/edl-users` | List logins for nginx (name and hash), written from the database. Never served. |
+| `/var/lib/furnace/archive/archive.csv` | The archive record of IPs and domains as CSV. Never served. |
+| `/var/lib/furnace/backups/` | Database backups. |
+| `/var/lib/furnace/reports/` | Import reports. |
+| `/var/lib/furnace-edl/` | `blocklist.txt`, `domains.txt` and `urls.txt` (served by nginx). |
+| `/var/lib/furnace-incoming/` | Snapshots received over SSH (only with the SSH backup copy on). |
+| `/run/furnace-state/role` | `leader` or `follower` (written by keepalived). |
+| `/var/log/furnace-setup.log` | Setup log. No secrets. |
+| `/root/furnace-new-secrets.txt` | Only when setup made new secrets without a person at the terminal (package upgrade). Read it, then delete it. |
+
+Services: `furnace-api` (gunicorn), `nginx`, `keepalived`. Timers: `furnace-cleanup`, `furnace-backup`,
+`furnace-replicate`. Path unit: `furnace-apply-replica` (only with the SSH backup copy on).
+Logs: `journalctl -u furnace-api`, `/var/log/nginx/furnace-access.log`.
+
+## 12. Upgrade and uninstall
+
+**Upgrade:** install the new package. Do the follower first, then the leader.
+
+```bash
+sudo apt install ./furnace_0.10.0_all.deb
+```
+
+The package runs `furnace setup --upgrade` by itself. It uses the saved answers and asks no questions.
+Data, tokens and the certificate are kept. The API is reloaded without downtime, and keepalived is restarted only
+if its settings changed, so an upgrade does not move the shared IP. If you change answers that affect keepalived
+(for example the VRRP router ID), the restart can move the shared IP to the other server. That is safe.
+
+**From 0.9 to 0.10:** nothing to do. The servers copy over HTTPS only: the upgrade removes the SSH replication
+login of older versions (the user `furnace-sync`, its folders and the firewall rule that let the other server in
+over SSH). Your own SSH rule (`SSH allowed from`) stays. Want SSH as a backup for the copy? Run `sudo furnace setup`
+on both servers and answer yes (section 10). `setup.conf` is saved with the new IP names (`LEADER_IP`,
+`FOLLOWER_IP`). Plain HTTP (`USE_HTTPS=no`, a test setting) is gone: such a server is switched to HTTPS and setup
+says so.
+
+**From 0.7 or older straight to 0.10:** do the follower first, as always. A 0.7 server can only copy over SSH, so
+on a server that comes from 0.7 the upgrade keeps the SSH backup on, and says so. When both servers run 0.10, turn
+it off: `sudo furnace setup` on both, answer no to the SSH backup question.
+
+**From 0.8 to 0.9:** nothing to do on the servers. 0.9 adds the Docker image (section 3.6); the `.deb` and `.rpm`
+work as in 0.8.
+
+**From 0.7 to 0.8:** nothing to do. Replication now goes over HTTPS. Setup makes the replication secret from
+the certificate key both servers already share, so no new bundle is needed. While one server is upgraded and the
+other is not yet, the leader uses SSH as before; when both run 0.8 it uses HTTPS. Port 443 between the servers is
+already open (the health check uses it). New: blocklist files through the API (section 6.9), and the URL
+blocklist (section 6.7.1): the upgrade adds `/edl/urls.txt` (empty until you add URLs) and `FURNACE_MAX_URLS`
+(the same limit as the other lists).
+**The domain whitelist changes in 0.8:** a whitelisted domain now also protects its subdomains, and shared
+platforms (`github.io`) and public names (`co.uk`) can no longer be whitelisted (section 8). The upgrade removes,
+once, the blocked domains that are subdomains of a domain already on the whitelist (audit source `upgrade`). Check
+first: `sudo furnace export whitelist-domains`. Old whitelist entries that would be refused today stay;
+`furnace status` names them.
+**Servers set up on RHEL 8 (AlmaLinux 8, Rocky 8, Oracle 8):** setup before 0.8 made a certificate there with
+"Basic Constraints" twice, which breaks the standard. Replication over HTTPS now accepts it, but some programs and
+firewalls may reject it. `furnace status` warns about it. Make a new one when it suits you (section 6.10).
+**Change your callers first:** the field `incident_id` is gone. A request that still sends it gets `400`, so remove
+it from your SOAR playbooks and scripts before the upgrade. The upgrade deletes every stored incident number (old
+backups still have them). The exports and the archive CSV no longer have the `incident_id` column.
+
+**From 0.6 to 0.7:** nothing to do. The database gets the archive record: every IP and domain in the lists, and
+every IP of the old archive, gets a record row. IPs in the list stay temporary with their dates. Domains stay as they
+are. Upgrade both servers the same day: a follower that still runs 0.6 and becomes the leader would let permanent
+IPs expire.
+
+**From 0.4 to 0.5:** nothing to do.
+
+**From 0.3 to 0.4:** nothing to do. Flask and gunicorn now come with Furnace. The system's
+`python3-flask` and `python3-gunicorn` are no longer needed; remove them with `sudo apt autoremove` if nothing else
+uses them.
+
+**From 0.5 to 0.6:** nothing to do. The tokens keep their rights and never expire: `block` gets blocklist
+read+write, `whitelist` gets whitelist read+write, a token with the scope `all` gets all four boxes. Upgrade the
+leader first. Until the follower is upgraded too, it refuses tokens with other box combinations (it does not know
+them); after a failover in that time, upgrade the follower.
+
+**From 0.3.0 to 0.3.1:** nothing to do. The settings get their new names (`API_ALLOW_FROM`,
+`LISTS_ALLOW_FROM`). Tokens and logins made by 0.3.0 keep their names (`xsoar`, `xsoar-whitelist`, `paloalto`).
+
+**From 0.2 to 0.3:** do the **leader first**, then the follower.
+- The API tokens of 0.2 keep working. They move from `/etc/furnace/tokens.env` into the database (names `block`
+  and `whitelist`), and the file is deleted.
+- The lists now need a login. The upgrade makes the login `lists` and writes its password to
+  `/root/furnace-new-secrets.txt`. Until you give it to the list reader, the list reader cannot download new
+  lists and keeps the last one it has. Delete the file afterwards.
+- Your saved IP limits stay. To open them to every address, run `sudo furnace setup` on both
+  servers and answer `any`.
+
+If the upgrade step reports a problem, the package stays installed. Fix the problem and run
+`sudo furnace setup --upgrade`. The details are in `/var/log/furnace-setup.log`.
+
+**Uninstall:**
+
+```bash
+# Debian family
+sudo apt remove furnace    # removes the program and stops the services, keeps the data, tokens and logins
+sudo apt purge furnace     # also deletes the database, backups, tokens, logins, certificate and users
+
+# Red Hat family
+sudo dnf remove furnace    # removes the program and stops the services, keeps the data, tokens and logins
+```
+
+Removing the package also removes the Furnace nginx site, the keepalived configuration (the shared IP is released),
+the Furnace firewall rules (ufw or firewalld; the firewall itself stays on) and the Furnace SELinux labels.
+Installing the package again later uses the kept data.
+
+`dnf remove furnace` also removes the packages that only Furnace needed and dnf installed for it (for example nginx,
+keepalived, or a `python3.12` on RHEL 8). If the SSH server (`openssh-server`) came in only with Furnace, it goes
+too: check the list dnf shows before you answer yes, or keep it with `sudo dnf mark install openssh-server` first.
+
+RPM has no "purge". To delete all Furnace data after `dnf remove furnace`:
+
+```bash
+sudo rm -rf /var/lib/furnace /var/lib/furnace-edl /var/lib/furnace-auth /var/lib/furnace-incoming \
+    /var/lib/furnace-sync /etc/furnace /root/furnace-peer-bundle.tar.gz /var/log/furnace-setup.log
+sudo userdel furnace-sync 2>/dev/null; sudo userdel furnace
+```
+
+SELinux: setup turns on `httpd_can_network_connect`. Removing Furnace leaves it on, because other programs may need
+it. Turn it off with `sudo setsebool -P httpd_can_network_connect off` if nothing else uses it.
+
+## 13. Tests
+
+Every release is tested before it is published: unit tests, a test with two servers on each of the 11
+systems (install, setup, the API, the lists, replication, failover, upgrade and removal), Docker tests, and tests on
+two virtual machines. The results of each release are in its release notes.
+
+## 14. What was not tested
+
+Be aware of these limits before you go live:
+
+- **Docker on physical servers, VMware and clouds.** The two-host setup was tested on two Hyper-V VMs (Ubuntu
+  24.04, Docker 29, `network_mode: host`): the steps of section 3.6, `docker stop` on the leader (no failed list
+  download) and a hard crash of the leader VM (one failed download, about 3 seconds; no data lost; the crashed
+  host came back as the standby by itself). Also each host powered off for minutes (leader, then the new leader, then
+  the follower): the other host served everything, and the returning host caught up within 20 seconds. Not on physical servers, VMware or a cloud network: test a failover
+  on your hosts before you go live.
+- **A real Palo Alto firewall.** The EDL download, also with the EDL login, was tested with curl from a container.
+  The PAN-OS menus in this README come from documentation and may differ in your version.
+- **A real XSOAR server.** The API calls were tested with curl. XSOAR's own way to trust a certificate was not
+  tested.
+- **Debian, the Red Hat family, Fedora and Amazon Linux on real servers.** They were tested in Docker containers,
+  where SELinux is off. SELinux was tested on one AlmaLinux VM only (see section 13).
+- **keepalived on real servers or VMs.** It was tested only in Docker containers on one host. Real switches,
+  VMware/Hyper-V port security, ARP behaviour and a real network outage (split brain) were not tested.
+- **A real power cut.** SQLite `synchronous=FULL` and atomic renames are designed for this, but it was not tested.
+- **Long running time.** No test ran for days. Audit log growth and backup rotation over months were not tested.
+- **Large real lists with the firewall.** 30,000-line imports were timed (about 2 seconds), but not loaded by a
+  firewall.
+- **A server without its system's package mirror.** apt needs the mirror, a proxy or a local mirror for the
+  dependencies. An install without any of them was not tested.
+- **`furnace setup` over a real SSH session.** The questions were answered through a terminal in a container,
+  not by a person over SSH.
+- **An upgrade from 0.2 on real servers.** The token migration was tested in unit tests, not with a real 0.2
+  install.
+- `HOST_FIREWALL=none` and `furnace setup --config` for a follower were not run in the integration test.
+- **An upgrade from a real 0.7 pair straight to 0.10.** The test makes a server look like 0.7 (no replication
+  secret) and checks that the SSH backup stays on; it does not install 0.7 first.
+
+## 15. Examples: Palo Alto and Cortex XSOAR
+
+These are the tested products. Menu names can differ between versions. Other products need the same things:
+trust the certificate, the list URLs with the list login, and the API token.
+
+### 15.1 Palo Alto firewall (list reader)
+
+Palo Alto calls the lists EDLs (External Dynamic Lists).
+
+**Certificate**
+
+1. Copy `/etc/furnace/tls/furnace.crt` from the leader.
+2. **Device > Certificate Management > Certificates > Import**. Import `furnace.crt`. Mark it as
+   **Trusted Root CA**.
+3. **Device > Certificate Management > Certificate Profile > Add**. Add `furnace.crt` as the CA (Certificate
+   Authority).
+4. Commit.
+
+**EDL objects**
+
+1. **Objects > External Dynamic Lists > Add**:
+   - Name: for example `Furnace-IP-Blocklist`
+   - Type: **IP List**
+   - Source: `https://SHARED_IP/edl/blocklist.txt`
+   - Certificate Profile: the profile from above
+   - Client Authentication: the list login (user `lists` and its password)
+   - Check for updates: **Every five minutes**
+2. Add a second EDL:
+   - Type: **Domain List**
+   - Source: `https://SHARED_IP/edl/domains.txt`
+   - Same certificate profile, list login and update interval.
+3. If you block URLs, add a third EDL:
+   - Type: **URL List**
+   - Source: `https://SHARED_IP/edl/urls.txt`
+   - Same certificate profile, list login and update interval.
+4. Use the IP list in security policy rules (deny, source and/or destination).
+   Use the domain list in an Anti-Spyware profile (DNS policies): it blocks the DNS lookup.
+   Use the URL list as a custom URL category: in a security rule (URL Category, action deny) or in a URL Filtering
+   profile (action block). It blocks the web traffic itself (HTTP, and HTTPS by the server name).
+   Deny the `quic` application, so browsers use HTTPS the firewall can read. Paths only work with SSL decryption.
+5. Commit. Check that the firewall downloaded the lists (in the EDL object, "Test Source URL", or on the CLI:
+   `request system external-list show type ip name Furnace-IP-Blocklist`).
+6. Check your firewall model's EDL limit and set `MAX_IPS` to it.
+
+The firewall downloads EDLs from its management interface by default. With a **service route** for External
+Dynamic Lists, it uses that interface. That matters only if you limit `LISTS_ALLOW_FROM`.
+
+### 15.2 Cortex XSOAR (caller)
+
+- Store the API token in the XSOAR credentials store (a token with blocklist write; add whitelist write only if
+  XSOAR changes the whitelist).
+- Furnace does not need an XSOAR integration or pack. Use plain HTTP calls (for example the generic HTTP
+  integration or a script) as described in [section 6](#6-api-guide).
+- Send the analyst's name in `added_by`. If you want the XSOAR incident number in Furnace, put it into
+  `reason` (for example `Phishing C2 (incident 4521)`).
+- Trust the certificate: add `furnace.crt` as a trusted custom certificate for the server or engine that makes the
+  call. Look for "custom certificates" or "trusted certificates" in the XSOAR documentation for your version.
+- If XSOAR uses engines, the calls come from the engines' IPs. That matters only if you limit `API_ALLOW_FROM`.
