@@ -15,8 +15,13 @@ The tested setup is Cortex XSOAR as the caller and a Palo Alto firewall as the l
 in [section 15](#15-examples-palo-alto-and-cortex-xsoar). Other products work the same way: any caller that can send
 HTTPS requests, and any list reader that can download a text file over HTTPS with a user and password.
 
+**License.** Furnace is made by Hollowgate Tech and is free to use under the [Furnace License](LICENSE) (not open
+source). The open-source parts inside it keep their own licenses: [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
+In an installed package both files are in `/usr/share/doc/furnace/` (`.rpm`: `/usr/share/licenses/furnace/`).
+
 **Furnace is free to use. The source code is not public.** This repository holds the released packages, the Docker
-image files, the release notes and the guides.
+image files, the release notes and the guides. Furnace is made by Hollowgate Tech; the terms are in the
+[Furnace License](LICENSE), the open-source parts inside it in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
 
 - **Download:** the [releases page](https://github.com/MahammadRahimov/furnace-releases/releases).
 - **Deploy step by step:** the [deployment guides](docs/deploy/README.md).

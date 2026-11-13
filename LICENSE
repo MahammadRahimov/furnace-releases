@@ -1,0 +1,36 @@
+Furnace License
+
+Copyright (c) 2026 Hollowgate Tech. All rights reserved.
+
+"Furnace" means the Furnace software in every released form: the .deb and .rpm packages, the Docker image, the
+compose and example files, and their documentation.
+
+1. Use. You may install and use Furnace for free, on any number of servers, for yourself or inside your
+   organization, also for commercial work (for example to protect your company's network or your customers'
+   networks).
+
+2. Copies. You may copy and share the unchanged release files, for free, with anyone (for example to a server
+   without internet, to an internal package mirror, or to a partner company). Every copy must keep this license.
+
+3. You may not:
+   a. sell Furnace, rent it, charge money for copies of it, or offer it as a paid product or a paid hosted
+      service of its own;
+   b. publish or share a changed version of Furnace;
+   c. change, translate or build on the code of Furnace, or take parts of it into other software, except changes
+      to the settings files that Furnace asks you to edit;
+   d. remove or change this license or the copyright notices.
+
+4. Other software. Furnace includes open-source parts (for example Flask, gunicorn and the Public Suffix List)
+   and the Docker image includes Debian packages. Each of them keeps its own license, which is shipped next to
+   it. This license does not limit your rights under those licenses.
+
+5. No warranty. Furnace is provided "as is", without any warranty. You are responsible for testing it before you
+   use it and for how you use it, including what you block on your firewalls.
+
+6. No liability. Hollowgate Tech is not liable for any damage, loss of data, loss of business or outage that
+   comes from using Furnace or from not being able to use it, as far as the law allows.
+
+7. End. If you break these terms, your right to use Furnace ends. These terms apply to every released version of
+   Furnace. Later versions may come with different terms.
+
+Official download page: https://github.com/MahammadRahimov/furnace-releases

@@ -1,0 +1,32 @@
+Furnace: other software inside it
+
+Furnace itself is under the Furnace License (the file LICENSE). It includes the open-source parts below. Each one
+keeps its own license. The Furnace License does not limit your rights under these licenses.
+
+Python libraries, in /usr/lib/furnace/vendor (each with its license file in its *.dist-info folder):
+
+  blinker              MIT License
+  click                BSD 3-Clause License
+  flask                BSD 3-Clause License
+  gunicorn             MIT License
+  importlib_metadata   Apache License 2.0
+  itsdangerous         BSD 3-Clause License
+  jinja2               BSD 3-Clause License
+  markupsafe           BSD 3-Clause License
+  packaging            Apache License 2.0 or BSD 2-Clause License
+  werkzeug             BSD 3-Clause License
+  zipp                 MIT License
+
+The exact versions are in the folder names. Their source code is on https://pypi.org.
+
+Public Suffix List, in /usr/lib/furnace/furnace/public_suffix_list.dat
+  Mozilla Public License 2.0 (https://mozilla.org/MPL/2.0/). The file is its own source form, unchanged.
+  It comes from https://publicsuffix.org/list/public_suffix_list.dat.
+
+Docker image only: the image is built on Debian 12 (debian:12-slim) and includes Debian packages, for example
+python3, nginx, keepalived, openssl, curl and sqlite3. Their licenses are in /usr/share/doc/<package>/copyright
+inside the image. Their source code is on https://sources.debian.org (the versions are listed by
+`dpkg -l` inside the image).
+
+On a server installed from the .deb or .rpm package, Furnace uses the system's own programs (python3, nginx,
+keepalived and others). They are not part of Furnace and come with the system's own licenses.
