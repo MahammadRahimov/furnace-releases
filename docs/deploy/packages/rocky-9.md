@@ -160,11 +160,11 @@ SELinux is **Enforcing** by default on Rocky Linux 9. Keep it as it is. Setup ha
 
 ```bash
 cd ~
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0/furnace-0.10.0-1.noarch.rpm
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace-0.10.0-1.noarch.rpm
 ls -l furnace-0.10.0-1.noarch.rpm
 ```
 
-No direct internet on the server? Download it on your PC from <https://github.com/MahammadRahimov/furnace/releases>
+No direct internet on the server? Download it on your PC from <https://github.com/MahammadRahimov/furnace-releases/releases>
 (release v0.10.0) and copy it over: `scp furnace-0.10.0-1.noarch.rpm you@192.0.2.11:~/`.
 
 ### A8. Install the package
@@ -454,7 +454,7 @@ SELinux is **Enforcing** by default on Rocky Linux 9. Keep it as it is. Setup ha
 
 ```bash
 cd ~
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0/furnace-0.10.0-1.noarch.rpm
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace-0.10.0-1.noarch.rpm
 ls -l furnace-0.10.0-1.noarch.rpm
 ```
 
@@ -790,7 +790,7 @@ journalctl -u furnace-api --since today
 owns the shared IP now; do the other one first.
 
 ```bash
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/vNEW/furnace-NEW-1.noarch.rpm
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/vNEW/furnace-NEW-1.noarch.rpm
 sudo dnf install ./furnace-NEW-1.noarch.rpm
 ```
 

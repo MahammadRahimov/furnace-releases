@@ -160,11 +160,11 @@ Do **not** turn on firewalld on Debian 12 while ufw is on. Starting firewalld re
 
 ```bash
 cd ~
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0/furnace_0.10.0_all.deb
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace_0.10.0_all.deb
 ls -l furnace_0.10.0_all.deb
 ```
 
-No direct internet on the server? Download it on your PC from <https://github.com/MahammadRahimov/furnace/releases>
+No direct internet on the server? Download it on your PC from <https://github.com/MahammadRahimov/furnace-releases/releases>
 (release v0.10.0) and copy it over: `scp furnace_0.10.0_all.deb you@192.0.2.11:~/`.
 
 ### A7. Install the package
@@ -454,7 +454,7 @@ Do **not** turn on firewalld on Debian 12 while ufw is on. Starting firewalld re
 
 ```bash
 cd ~
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0/furnace_0.10.0_all.deb
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace_0.10.0_all.deb
 ls -l furnace_0.10.0_all.deb
 ```
 
@@ -795,7 +795,7 @@ journalctl -u furnace-api --since today
 owns the shared IP now; do the other one first.
 
 ```bash
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/vNEW/furnace_NEW_all.deb
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/vNEW/furnace_NEW_all.deb
 sudo apt install ./furnace_NEW_all.deb
 ```
 

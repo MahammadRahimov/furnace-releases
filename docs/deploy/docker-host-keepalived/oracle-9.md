@@ -256,9 +256,9 @@ makes it refuse scripts that others could change (the Furnace scripts are owned 
 
 ```bash
 mkdir ~/furnace && cd ~/furnace
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0/furnace-image-0.10.0.tar.gz
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0/docker-compose.yml
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0/env.example
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace-image-0.10.0.tar.gz
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/docker-compose.yml
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/env.example
 sudo docker load -i furnace-image-0.10.0.tar.gz     # "Loaded image: furnace:0.10.0"
 mv env.example .env
 ls -la                                                  # .env  docker-compose.yml  furnace-image-0.10.0.tar.gz
@@ -689,8 +689,8 @@ makes it refuse scripts that others could change (the Furnace scripts are owned 
 
 ```bash
 mkdir ~/furnace && cd ~/furnace
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0/furnace-image-0.10.0.tar.gz
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0/docker-compose.yml
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace-image-0.10.0.tar.gz
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/docker-compose.yml
 sudo docker load -i furnace-image-0.10.0.tar.gz     # "Loaded image: furnace:0.10.0"
 ```
 
@@ -1005,8 +1005,8 @@ the leader now):
 
 ```bash
 cd ~/furnace
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/vNEW/furnace-image-NEW.tar.gz
-curl -fLO https://github.com/MahammadRahimov/furnace/releases/download/vNEW/docker-compose.yml        # names the new image; .env stays
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/vNEW/furnace-image-NEW.tar.gz
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/vNEW/docker-compose.yml        # names the new image; .env stays
 sudo docker load -i furnace-image-NEW.tar.gz
 sudo docker compose up -d
 ```

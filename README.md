@@ -131,10 +131,11 @@ Everything else (setup, questions, the `furnace` command) is the same on every s
 
 ### 3.1 Get the package
 
-- **Download it** from the GitHub releases page: <https://github.com/MahammadRahimov/furnace/releases>.
-  The repository is private, so log in to GitHub first. Or, with the GitHub command line tool:
+- **Download it** from the releases page: <https://github.com/MahammadRahimov/furnace-releases/releases>
+  (no login needed). Or straight on the server:
   ```bash
-  gh release download v0.10.0 -R MahammadRahimov/furnace -p '*.deb'    # or -p '*.rpm'
+  curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace_0.10.0_all.deb
+  # or: curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace-0.10.0-1.noarch.rpm
   ```
 - Copy it to both servers, for example: `scp furnace_0.10.0_all.deb you@SERVER_IP:~/`
 
@@ -332,10 +333,8 @@ The container uses the host network (`network_mode: host`) and gets only two ext
 
 ```bash
 mkdir ~/furnace && cd ~/furnace
-gh release download v0.10.0 -R MahammadRahimov/furnace -p 'furnace-image-*.tar.gz' -p docker-compose.yml -p env.example
-# without gh (only when the repository is public):
-#   R=https://github.com/MahammadRahimov/furnace/releases/download/v0.10.0
-#   curl -fLO $R/furnace-image-0.10.0.tar.gz -fLO $R/docker-compose.yml -fLO $R/env.example
+R=https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0
+curl -fLO $R/furnace-image-0.10.0.tar.gz -fLO $R/docker-compose.yml -fLO $R/env.example
 docker load -i furnace-image-0.10.0.tar.gz        # "Loaded image: furnace:0.10.0"
 mv env.example .env                              # GitHub drops the leading dot of .env.example
 ```
