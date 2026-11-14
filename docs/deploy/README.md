@@ -1,4 +1,4 @@
-# Deployment guides (Furnace 0.10.0)
+# Deployment guides (Furnace 0.11.0)
 
 Furnace runs on **two hosts**: a leader (host A) and a follower (host B). A **shared IP** moves to the host that is
 alive. The firewall that downloads the lists and the SOAR that calls the API always use the shared IP.

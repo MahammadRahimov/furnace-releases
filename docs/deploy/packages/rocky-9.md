@@ -1,4 +1,4 @@
-# Furnace 0.10.0 on Rocky Linux 9: the .rpm package
+# Furnace 0.11.0 on Rocky Linux 9: the .rpm package
 
 [All guides](../README.md) · Same system, other ways: [Docker, keepalived in the container](../docker/rocky-9.md) · [Docker, keepalived on the host](../docker-host-keepalived/rocky-9.md)
 
@@ -63,7 +63,7 @@ shared IP at the same time ("split brain"). Ask for "IP protocol 112", not a por
 
 ### What is special on Rocky Linux 9
 
-- **Package:** `furnace-0.10.0-1.noarch.rpm`, installed with `dnf`. It pulls in nginx, keepalived, Python, OpenSSL, curl, SQLite and
+- **Package:** `furnace-0.11.0-1.noarch.rpm`, installed with `dnf`. It pulls in nginx, keepalived, Python, OpenSSL, curl, SQLite and
   firewalld and `policycoreutils-python-utils` (for SELinux) from the Rocky Linux 9 mirror.
   Flask and gunicorn are inside the Furnace package.
 - **Host firewall:** `firewalld` (running by default).
@@ -160,17 +160,17 @@ SELinux is **Enforcing** by default on Rocky Linux 9. Keep it as it is. Setup ha
 
 ```bash
 cd ~
-curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace-0.10.0-1.noarch.rpm
-ls -l furnace-0.10.0-1.noarch.rpm
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/furnace-0.11.0-1.noarch.rpm
+ls -l furnace-0.11.0-1.noarch.rpm
 ```
 
 No direct internet on the server? Download it on your PC from <https://github.com/MahammadRahimov/furnace-releases/releases>
-(release v0.10.0) and copy it over: `scp furnace-0.10.0-1.noarch.rpm you@192.0.2.11:~/`.
+(release v0.11.0) and copy it over: `scp furnace-0.11.0-1.noarch.rpm you@192.0.2.11:~/`.
 
 ### A8. Install the package
 
 ```bash
-sudo dnf install ./furnace-0.10.0-1.noarch.rpm
+sudo dnf install ./furnace-0.11.0-1.noarch.rpm
 ```
 
 dnf shows the extra packages it will install and asks *Is this ok* / *Do you want to continue*: answer `y`.
@@ -315,7 +315,7 @@ sudo furnace status
 ```
 
 ```text
-Furnace 0.10.0
+Furnace 0.11.0
 Role:     leader (this server owns the shared IP 192.0.2.10)
 Server:   192.0.2.11 on ens192, other server 192.0.2.12
 
@@ -454,14 +454,14 @@ SELinux is **Enforcing** by default on Rocky Linux 9. Keep it as it is. Setup ha
 
 ```bash
 cd ~
-curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace-0.10.0-1.noarch.rpm
-ls -l furnace-0.10.0-1.noarch.rpm
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/furnace-0.11.0-1.noarch.rpm
+ls -l furnace-0.11.0-1.noarch.rpm
 ```
 
 ### B8. Install the package
 
 ```bash
-sudo dnf install ./furnace-0.10.0-1.noarch.rpm
+sudo dnf install ./furnace-0.11.0-1.noarch.rpm
 ```
 
 Answer `y`. Nothing starts yet.
@@ -528,7 +528,7 @@ sudo furnace status
 ```
 
 ```text
-Furnace 0.10.0
+Furnace 0.11.0
 Role:     follower (the shared IP 192.0.2.10 is on the other server, 192.0.2.11)
 Server:   192.0.2.12 on ens192, other server 192.0.2.11
 
@@ -733,7 +733,7 @@ you want to set up host B again without a join code. Otherwise:
 sudo rm /root/furnace-peer-bundle.tar.gz
 ```
 
-Delete the package files too, if you like: `rm ~/furnace-0.10.0-1.noarch.rpm` (on both).
+Delete the package files too, if you like: `rm ~/furnace-0.11.0-1.noarch.rpm` (on both).
 
 ## Part 4. The same without questions (automation)
 
@@ -758,13 +758,13 @@ HOST_FIREWALL=firewalld       # needed only to let setup turn on a firewall that
 
 ```bash
 # host A
-sudo dnf install -y ./furnace-0.10.0-1.noarch.rpm
+sudo dnf install -y ./furnace-0.11.0-1.noarch.rpm
 sudo furnace setup --check --config config.env    # shows what it would do, changes nothing
 sudo furnace setup --config config.env
 sudo furnace join-code                            # copy the code
 
 # host B: the same file, plus the code (used once, never saved)
-sudo dnf install -y ./furnace-0.10.0-1.noarch.rpm
+sudo dnf install -y ./furnace-0.11.0-1.noarch.rpm
 echo 'JOIN_CODE=FJ1-...' >> config.env
 sudo furnace setup --config config.env
 ```
@@ -786,34 +786,67 @@ journalctl -u furnace-api --since today
 **Change a setting:** run `sudo furnace setup` again. The brackets show the current answers. Change a shared setting
 (shared IP, VRRP router ID, limits) on **both** hosts with the same answer.
 
-**Upgrade** to a newer version: **host B (the standby) first, then host A**. Check with `sudo furnace status` which one
-owns the shared IP now; do the other one first.
+### Update Furnace
+
+Nothing updates by itself, and only Furnace changes: the other packages on the server stay as they are.
+
+**Once, on both hosts:** add the signed Furnace package repository (the key comes with the package):
 
 ```bash
-curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/vNEW/furnace-NEW-1.noarch.rpm
-sudo dnf install ./furnace-NEW-1.noarch.rpm
+sudo furnace repo add          # "It works. Newest Furnace there: ..."
+```
+
+Once a day each host checks whether a newer version is out (it reads one small public file and sends nothing
+about the server). `sudo furnace status` then shows a line `Updates:  A new version is available: ...`.
+
+**When there is a new version:** first the host **without** the shared IP (`sudo furnace status` shows the role;
+after a failover that can be host A), then the other one:
+
+```bash
+sudo furnace upgrade --check   # is there a new version? Changes nothing.
+sudo furnace upgrade           # asks, then: a database copy, the new package, a self-check
+```
+
+On the host with the shared IP it stops with a message until the other host has the new version. Each release has
+notes on the GitHub release page: read them before you update.
+
+**Going back** to the version before: `sudo furnace upgrade --rollback`, on both hosts.
+**A host without internet:** download the new package on another computer, copy it to the host, then
+`sudo furnace upgrade --file furnace-NEW-1.noarch.rpm`.
+**No daily check:** `UPDATE_CHECK=no` in `/etc/furnace/setup.conf`, then `sudo furnace setup --upgrade`.
+
+If the setup step of an update reports a problem, the package stays installed: fix it and run
+`sudo furnace setup --upgrade` (details in `/var/log/furnace-setup.log`).
+
+### Coming from 0.9 or 0.10
+
+0.9 and 0.10 have no `furnace upgrade`, so the update to 0.11.0 is the last one by hand. First the host without
+the shared IP, then the other one:
+
+```bash
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/furnace-0.11.0-1.noarch.rpm
+sudo dnf install ./furnace-0.11.0-1.noarch.rpm
+sudo furnace repo add          # from now on: sudo furnace upgrade
 ```
 
 The package runs `furnace setup --upgrade` by itself: no questions, data and secrets kept, the shared IP does not
-move. Each release has notes on the GitHub release page: read them before you upgrade. If the upgrade step reports
-a problem, the package stays installed: fix it and run `sudo furnace setup --upgrade`
-(details in `/var/log/furnace-setup.log`).
+move. `dnf` shows the version as `1:0.11.0` (the `1:` keeps Furnace newer than other programs called
+`furnace`); `furnace version` shows `0.11.0`.
+- **From 0.9:** the servers copy over HTTPS only, and the update removes the old SSH copy login (`furnace-sync`).
+  Your own SSH rule stays. `setup.conf` gets the new IP names (`LEADER_IP`, `FOLLOWER_IP`).
+- **From 0.7 or older:** the update keeps the SSH backup copy on, because a 0.7 server can copy only over SSH.
+  When both run 0.11.0, turn it off: `sudo furnace setup` on both, answer `no` to the SSH backup question.
 
-Coming from an older Furnace to 0.10.0:
-- **From 0.9:** nothing to do. The servers copy over HTTPS only, and the upgrade removes the old SSH copy login
-  (`furnace-sync`). Your own SSH rule stays. `setup.conf` gets the new IP names (`LEADER_IP`, `FOLLOWER_IP`).
-- **From 0.7 or older:** host B first, as always. The upgrade keeps the SSH backup copy on, because a 0.7 server can
-  copy only over SSH. When both run 0.10.0, turn it off: `sudo furnace setup` on both, answer `no` to the SSH
-  backup question.
+### Uninstall
 
-**Uninstall** (on both):
+On both hosts:
 
 ```bash
 sudo dnf remove furnace     # program gone; data, tokens and logins kept
 
 # RPM has no purge. To delete all Furnace data afterwards:
 sudo rm -rf /var/lib/furnace /var/lib/furnace-edl /var/lib/furnace-auth /var/lib/furnace-incoming \
-    /var/lib/furnace-sync /etc/furnace /root/furnace-peer-bundle.tar.gz /var/log/furnace-setup.log
+    /var/lib/furnace-sync /var/lib/furnace-upgrade /etc/furnace /root/furnace-peer-bundle.tar.gz /var/log/furnace-setup.log
 sudo userdel furnace-sync 2>/dev/null; sudo userdel furnace
 ```
 

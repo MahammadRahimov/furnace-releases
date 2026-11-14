@@ -42,7 +42,7 @@ image files, the release notes and the guides. Furnace is made by Hollowgate Tec
 9. [The nightly cleanup and the archive](#9-the-nightly-cleanup-and-the-archive)
 10. [Two servers: leader and follower](#10-two-servers-leader-and-follower)
 11. [Files and folders](#11-files-and-folders)
-12. [Upgrade and uninstall](#12-upgrade-and-uninstall)
+12. [Update and uninstall](#12-update-and-uninstall)
 13. [Tests](#13-tests)
 14. [What was not tested](#14-what-was-not-tested)
 15. [Examples: Palo Alto and Cortex XSOAR](#15-examples-palo-alto-and-cortex-xsoar)
@@ -126,7 +126,7 @@ You need one file:
 - **Ubuntu and Debian:** `furnace_<version>_all.deb`, installed with `sudo apt install ./FILE`.
 - **Red Hat family, Fedora, Amazon Linux:** `furnace-<version>-1.noarch.rpm`, installed with `sudo dnf install ./FILE`.
 
-The examples below use version 0.10.0 and the `.deb`. With the `.rpm`, use `dnf` where they say `apt`.
+The examples below use version 0.11.0 and the `.deb`. With the `.rpm`, use `dnf` where they say `apt`.
 Everything else (setup, questions, the `furnace` command) is the same on every system.
 
 ### 3.1 Get the package
@@ -134,10 +134,10 @@ Everything else (setup, questions, the `furnace` command) is the same on every s
 - **Download it** from the releases page: <https://github.com/MahammadRahimov/furnace-releases/releases>
   (no login needed). Or straight on the server:
   ```bash
-  curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace_0.10.0_all.deb
-  # or: curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace-0.10.0-1.noarch.rpm
+  curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/furnace_0.11.0_all.deb
+  # or: curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/furnace-0.11.0-1.noarch.rpm
   ```
-- Copy it to both servers, for example: `scp furnace_0.10.0_all.deb you@SERVER_IP:~/`
+- Copy it to both servers, for example: `scp furnace_0.11.0_all.deb you@SERVER_IP:~/`
 
 **The signing key.** From v0.11.0, Hollowgate Tech signs the Furnace packages and the package repository with
 this key, so your server can check that a file really comes from us and was not changed:
@@ -151,11 +151,14 @@ The public key is in the releases repository: `RPM-GPG-KEY-furnace` (for `rpm` a
 `furnace-archive-keyring.gpg` (for apt). Check the fingerprint after you download it:
 `gpg --show-keys RPM-GPG-KEY-furnace`. Releases up to 0.10.0 are not signed.
 
+**Updates later.** After setup, run `sudo furnace repo add` once on both servers. From then on a new version is
+one command, `sudo furnace upgrade` ([section 12.1](#121-update-furnace-packages)).
+
 ### 3.2 Leader
 
 1. Install the package:
    ```bash
-   sudo apt install ./furnace_0.10.0_all.deb
+   sudo apt install ./furnace_0.11.0_all.deb
    ```
    apt also installs what Furnace needs from the system: nginx, keepalived, Python and a few tools.
    Nothing starts yet.
@@ -222,7 +225,7 @@ The follower needs the leader's certificate and secrets. The easy way is a **joi
    only from the follower's IP. A new code replaces the old one.
 2. On the follower, install the package and run setup:
    ```bash
-   sudo apt install ./furnace_0.10.0_all.deb
+   sudo apt install ./furnace_0.11.0_all.deb
    sudo furnace setup
    ```
 3. Answer `follower`, then type the join code. The follower fetches the certificate and the secrets from the
@@ -341,15 +344,20 @@ The container uses the host network (`network_mode: host`) and gets only two ext
 **The two files.** Furnace gives you `docker/docker-compose.yml` (how to run the container; never edit it) and
 `docker/.env.example` (your settings). Both hosts use the same `docker-compose.yml`; only `.env` differs.
 
-**1. Download and load** (on both hosts). The image and the two files are on the GitHub release:
+**1. Download** (on both hosts). The two files are on the GitHub release. The image comes from GitHub's container
+registry, `ghcr.io/mahammadrahimov/furnace` (public, no login), with the version in `FURNACE_VERSION` in `.env`:
 
 ```bash
 mkdir ~/furnace && cd ~/furnace
-R=https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0
-curl -fLO $R/furnace-image-0.10.0.tar.gz -fLO $R/docker-compose.yml -fLO $R/env.example
-docker load -i furnace-image-0.10.0.tar.gz        # "Loaded image: furnace:0.10.0"
+R=https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0
+curl -fLO $R/docker-compose.yml -fLO $R/env.example
 mv env.example .env                              # GitHub drops the leading dot of .env.example
+docker compose pull                              # ghcr.io/mahammadrahimov/furnace:0.11.0
 ```
+
+**A host without internet:** download `furnace-image-0.11.0.tar.gz` from the release page on another computer,
+copy it to the host, then `docker load -i furnace-image-0.11.0.tar.gz` ("Loaded image:
+ghcr.io/mahammadrahimov/furnace:0.11.0"). Your own registry: `FURNACE_IMAGE` in `.env`.
 
 **2. Leader (host A).** In the folder, write your settings:
 
@@ -494,9 +502,9 @@ If the Furnace container stops, the host's health check fails and the shared IP 
 **Backup:** the leader makes a daily backup in `./data/backups`. To be safe from a lost host, copy `./config` and
 `./data` somewhere else from time to time.
 
-**Upgrade:** load the new image, put the new `docker-compose.yml` in the folder (it names the new image; your
-`.env` stays), then `docker compose up -d`. The leader first, then the follower. The database is updated at
-start. Data and secrets stay in `./config` and `./data`.
+**Update:** change `FURNACE_VERSION` in `.env`, then `docker compose pull && docker compose up -d`, first on the
+host without the shared IP ([section 12.2](#122-update-furnace-docker)). Data and secrets stay in `./config` and
+`./data`; a copy of the database is made first.
 
 **Differences from the package (`.deb`/`.rpm`):**
 - No setup questions and no self-test at start. `furnace setup` and `furnace failover-test` do not exist.
@@ -511,9 +519,9 @@ failover and the API, in a few minutes. It also runs on Docker Desktop (Windows,
 
 `docker/docker-compose.lab.yml` has everything filled in: a leader (`203.0.113.11`), a follower (`.12`), the
 shared IP `203.0.113.10` and a small **client** box (`.50`) that plays the firewall and the caller. These addresses
-are a documentation range and exist only inside Docker. Nothing to change. Load the image first (step 1 of
-3.6: `furnace-image-0.10.0.tar.gz`; `docker-compose.lab.yml` is on the release too). From the folder with
-`docker-compose.lab.yml` (in the repository: `docker/`):
+are a documentation range and exist only inside Docker. Nothing to change: `docker compose` takes the image from
+`ghcr.io` (or load `furnace-image-0.11.0.tar.gz` first, step 1 of 3.6). `docker-compose.lab.yml` is on the release
+page too. From the folder with `docker-compose.lab.yml` (in the repository: `docker/`):
 
 ```bash
 docker compose -f docker-compose.lab.yml up -d leader client
@@ -563,6 +571,7 @@ Each question saves one setting in `/etc/furnace/setup.conf`. The same names are
 | SSH allowed from | `SSH_ALLOW_FROM` | `any` | Who may log in with SSH (people, for example admins). `any` or a list of IPs. |
 | Use SSH as a backup for the copy? | `REPLICATION_SSH_FALLBACK` | `no` | `yes` = when HTTPS does not work, the leader copies over SSH (adds the user `furnace-sync` and SSH from the other server). `no` = HTTPS only. Section 10. |
 | Set up the host firewall? | `HOST_FIREWALL` | the active one | `ufw` or `firewalld` = configure it; it must be the active one, or the only one installed when none is active (then setup turns it on). `none` = leave it alone. Not in a settings file: the active one, or `none` when no firewall is active. Both active: setup stops (use `none` and open the ports yourself). |
+| (not asked) | `UPDATE_CHECK` | `yes` | `yes` = once a day, check whether a newer Furnace is out (one small public file; nothing about the server is sent, nothing is installed). `no` = never. Section 12.3. |
 | (not asked) | `KEEPALIVED_PASSWORD` | random | VRRP (Virtual Router Redundancy Protocol) password, 6-8 characters. Created on the leader. The follower gets it from the bundle. |
 
 Before 0.3.1, `API_ALLOW_FROM` was called `XSOAR_IP` and `LISTS_ALLOW_FROM` was called `FIREWALL_IP`. The old names
@@ -985,7 +994,7 @@ The new key also gives a new replication secret. Both servers get it from the sa
 IPs). Callers and list readers cannot reach it. It is for keepalived and the admins.
 
 ```json
-{"status": "ok", "version": "0.10.0", "role": "leader", "ips": 1234, "domains": 56}
+{"status": "ok", "version": "0.11.0", "role": "leader", "ips": 1234, "domains": 56}
 ```
 
 ---
@@ -1010,6 +1019,12 @@ sudo furnace export ips -o /tmp/ips.csv  # also: ips-archive, domains, domains-a
                                         # whitelist-ips, whitelist-domains (these can be uploaded again,
                                         # section 7.4), archive (all three types, read only), audit
 sudo furnace check-config                # show the settings (no secrets)
+```
+
+```bash
+sudo furnace repo add                    # once: the signed Furnace package repository (section 12.1)
+sudo furnace upgrade --check             # is there a new version? Changes nothing.
+sudo furnace upgrade                     # update Furnace only (also: --file FILE, --rollback)
 ```
 
 ### 7.1 API tokens, list logins and the lockout
@@ -1126,7 +1141,7 @@ Export on the server (`sudo furnace export ips -o ips.csv`) or through the API
 
 ```
 # furnace-export ips v1
-# Furnace 0.10.0, exported 2026-11-03T10:00:00Z. Upload it again with /api/v1/ips/bulk or furnace import-ips.
+# Furnace 0.11.0, exported 2026-11-03T10:00:00Z. Upload it again with /api/v1/ips/bulk or furnace import-ips.
 ip,added_at,added_by,reason,permanent,counted_from
 203.0.113.5,2026-10-01T10:00:00Z,soar,phishing,no,2026-10-01T10:00:00Z
 ```
@@ -1345,23 +1360,140 @@ shared IP as the leader, and then starts the service again. Afterwards the other
 | `/run/furnace-state/role` | `leader` or `follower` (written by keepalived). |
 | `/var/log/furnace-setup.log` | Setup log. No secrets. |
 | `/root/furnace-new-secrets.txt` | Only when setup made new secrets without a person at the terminal (package upgrade). Read it, then delete it. |
+| `/usr/lib/furnace/keys/` | The public signing key (Hollowgate Tech). `furnace repo add` and `furnace upgrade --file` use it. |
+| `/var/lib/furnace-upgrade/` | A copy of the database before each `furnace upgrade` (the newest 5), and `last` (the last update, for `--rollback`). |
+| `/var/lib/furnace/update-check.json` | The result of the last daily update check. |
+| `/etc/apt/sources.list.d/furnace.sources`, `/etc/apt/preferences.d/furnace`, `/usr/share/keyrings/furnace-archive-keyring.gpg` | Debian family, after `furnace repo add`: the repository, "furnace only from there", the key. |
+| `/etc/yum.repos.d/furnace.repo`, `/etc/pki/rpm-gpg/RPM-GPG-KEY-furnace` | Red Hat family, after `furnace repo add`: the repository (priority 10) and the key. |
 
 Services: `furnace-api` (gunicorn), `nginx`, `keepalived`. Timers: `furnace-cleanup`, `furnace-backup`,
-`furnace-replicate`. Path unit: `furnace-apply-replica` (only with the SSH backup copy on).
+`furnace-replicate`, `furnace-update-check` (once a day, off with `UPDATE_CHECK=no`). Path unit:
+`furnace-apply-replica` (only with the SSH backup copy on).
+
+Docker: the same inside the container; on the host `./config` (`/etc/furnace`) and `./data` (`/var/lib/furnace`),
+with `./data/version-backups/` (a copy of the database before each new version, the newest 5).
 Logs: `journalctl -u furnace-api`, `/var/log/nginx/furnace-access.log`.
 
-## 12. Upgrade and uninstall
+## 12. Update and uninstall
 
-**Upgrade:** install the new package. Do the follower first, then the leader.
+Nothing updates by itself. You decide when, and only Furnace changes: the other programs on the server stay as
+they are. Each release has notes on the [releases page](https://github.com/MahammadRahimov/furnace-releases/releases):
+read them before you update.
+
+### 12.1 Update Furnace (packages)
+
+**Once, on both servers:** add the signed Furnace package repository. The key comes with the package; the package
+never adds the repository by itself.
 
 ```bash
-sudo apt install ./furnace_0.10.0_all.deb
+sudo furnace repo add
 ```
 
-The package runs `furnace setup --upgrade` by itself. It uses the saved answers and asks no questions.
-Data, tokens and the certificate are kept. The API is reloaded without downtime, and keepalived is restarted only
-if its settings changed, so an upgrade does not move the shared IP. If you change answers that affect keepalived
-(for example the VRRP router ID), the restart can move the shared IP to the other server. That is safe.
+It writes `/etc/apt/sources.list.d/furnace.sources`, the key and `/etc/apt/preferences.d/furnace` (Red Hat family:
+`/etc/yum.repos.d/furnace.repo` with `priority=10` and the key), then reads the repository once to check it.
+Fedora and Debian 13 have another program called `furnace` (a music program): these files make apt and dnf take
+`furnace` only from the Furnace repository. `sudo furnace repo remove` takes them away again.
+
+**When there is a new version** (`furnace status` shows it, section 12.3):
+
+```bash
+sudo furnace upgrade --check     # is there a new version? Changes nothing.
+sudo furnace upgrade             # first on the server WITHOUT the shared IP, then on the other one
+```
+
+- **Only the `furnace` package changes.** apt or dnf adds a new dependency only if the new version needs one.
+- **First a copy of the database**, in `/var/lib/furnace-upgrade/` (the newest 5 are kept).
+- **The other server first.** On the server that owns the shared IP (the leader) it stops with a message until the
+  other server has the new version. If the other server is down for good: `--force`.
+- The package runs `furnace setup --upgrade`: the saved answers, no questions. Data, tokens and the certificate
+  are kept. The API is reloaded without downtime, and keepalived is restarted only if its settings changed, so an
+  update does not move the shared IP.
+- **Then a self-check:** the API must answer with the new version, then `furnace status`.
+- It asks before it changes anything; `--yes` skips the question (for scripts).
+
+**Going back** to the version before the last update: `sudo furnace upgrade --rollback`. It takes that version from
+the repository, or from a file: `sudo furnace upgrade --rollback --file FILE`. The database stays as it is; the copy
+from before the update is in `/var/lib/furnace-upgrade/`. Go back on both servers.
+
+**A server without internet:** download the new package on another computer (releases page), copy it to the
+server, then:
+
+```bash
+sudo furnace upgrade --file furnace_0.11.1_all.deb      # or the .rpm; an .rpm must be signed with the Furnace key
+```
+
+apt and dnf show the version as `1:0.11.0`: the `1:` keeps Furnace newer than the other program called `furnace`.
+`furnace version` shows `0.11.0`.
+
+If the setup step of an update reports a problem, the package stays installed. Fix the problem and run
+`sudo furnace setup --upgrade`. The details are in `/var/log/furnace-setup.log`.
+
+### 12.2 Update Furnace (Docker)
+
+`.env` has the line `FURNACE_VERSION`. Change it, first on the host **without** the shared IP
+(`docker exec furnace furnace status` shows the role), then on the other:
+
+```bash
+cd ~/furnace
+sed -i 's/^FURNACE_VERSION=.*/FURNACE_VERSION=0.11.1/' .env
+docker compose pull && docker compose up -d
+```
+
+- The image comes from `ghcr.io/mahammadrahimov/furnace` (public, no login).
+- Before the new version starts, the container copies the database into `./data/version-backups/` (the newest 5).
+- When the leader is stopped, it first sends its last changes to the other host, then hands over the shared IP:
+  nothing is lost.
+- **Going back:** the old version in `FURNACE_VERSION`, the same two commands. A copy is made then too.
+- **A host without internet:** download `furnace-image-0.11.1.tar.gz` from the releases page on another computer,
+  copy it, `docker load -i furnace-image-0.11.1.tar.gz`, change `.env`, then `docker compose up -d`.
+
+### 12.3 The daily update check
+
+Once a day each server (and each container) reads one small public file, `latest.json` on
+`https://mahammadrahimov.github.io/furnace-releases/`. Nothing about the server is sent: no version, no counts, no
+names (GitHub sees the address that asks, as with any download). When a newer version is out, it writes one line
+to the log (`journalctl -u furnace-update-check`; Docker: `docker logs furnace`), and `furnace status` shows:
+
+```
+Updates:  A new version is available: Furnace 0.11.1 (this server has 0.11.0). ... Update: sudo furnace upgrade
+```
+
+It never installs anything. Without internet it fails quietly and tries again the next day. **Turn it off:**
+`UPDATE_CHECK=no` in `/etc/furnace/setup.conf`, then `sudo furnace setup --upgrade` (Docker:
+`FURNACE_UPDATE_CHECK=false` in `.env`, then `docker compose up -d`).
+
+### 12.4 Coming from 0.9 or 0.10
+
+0.9 and 0.10 do not have `furnace upgrade`. The update to 0.11 is the last one by hand. First the server or host
+**without** the shared IP, then the other one.
+
+**Packages** (Red Hat family: the `.rpm` and `dnf install`):
+
+```bash
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/furnace_0.11.0_all.deb
+sudo apt install ./furnace_0.11.0_all.deb
+sudo furnace repo add            # from now on: sudo furnace upgrade
+```
+
+**Docker:**
+
+```bash
+cd ~/furnace
+cp docker-compose.yml docker-compose.yml.0.10
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/docker-compose.yml
+echo FURNACE_VERSION=0.11.0 >> .env
+docker compose pull && docker compose up -d
+```
+
+Two things only this time, because the old version does not have them yet:
+- **Before you update the host WITH the shared IP**, pause the changes from your SOAR for a minute (or wait 30
+  seconds after the last change). 0.9 and 0.10 do not send their last changes before they stop, so changes of the
+  last 20 seconds could be lost.
+- **Going back to 0.10 makes no copy by itself.** Make one first (`docker exec furnace furnace backup`, it goes to
+  `./data/backups/`), then put `docker-compose.yml.0.10` back as `docker-compose.yml` and `docker compose up -d`.
+  The 0.10 image is still on the host.
+
+### 12.5 Older versions
 
 **From 0.9 to 0.10:** nothing to do. The servers copy over HTTPS only: the upgrade removes the SSH replication
 login of older versions (the user `furnace-sync`, its folders and the firewall rule that let the other server in
@@ -1423,10 +1555,10 @@ them); after a failover in that time, upgrade the follower.
 - Your saved IP limits stay. To open them to every address, run `sudo furnace setup` on both
   servers and answer `any`.
 
-If the upgrade step reports a problem, the package stays installed. Fix the problem and run
-`sudo furnace setup --upgrade`. The details are in `/var/log/furnace-setup.log`.
+### 12.6 Uninstall
 
-**Uninstall:**
+The Furnace repository (12.1) stays when you remove the package. Remove it first if you do not want it:
+`sudo furnace repo remove`.
 
 ```bash
 # Debian family
@@ -1449,7 +1581,7 @@ RPM has no "purge". To delete all Furnace data after `dnf remove furnace`:
 
 ```bash
 sudo rm -rf /var/lib/furnace /var/lib/furnace-edl /var/lib/furnace-auth /var/lib/furnace-incoming \
-    /var/lib/furnace-sync /etc/furnace /root/furnace-peer-bundle.tar.gz /var/log/furnace-setup.log
+    /var/lib/furnace-sync /var/lib/furnace-upgrade /etc/furnace /root/furnace-peer-bundle.tar.gz /var/log/furnace-setup.log
 sudo userdel furnace-sync 2>/dev/null; sudo userdel furnace
 ```
 

@@ -1,4 +1,4 @@
-# Furnace 0.10.0 on Oracle Linux 9: Docker, keepalived in the container
+# Furnace 0.11.0 on Oracle Linux 9: Docker, keepalived in the container
 
 [All guides](../README.md) · Same system, other ways: [Packages (.deb / .rpm)](../packages/oracle-9.md) · [Docker, keepalived on the host](../docker-host-keepalived/oracle-9.md)
 
@@ -179,19 +179,22 @@ getenforce
 
 SELinux is **Enforcing** by default on Oracle Linux 9. Keep it as it is. Docker CE runs containers without SELinux labels by default (`selinux-enabled` is off in Docker), so the two folders `config` and `data` need nothing. If you turned SELinux on for Docker in `/etc/docker/daemon.json`, add `:Z` to the two folder lines in `docker-compose.yml`.
 
-### A8. Download Furnace and load the image
+### A8. Download Furnace and the image
 
 ```bash
 mkdir ~/furnace && cd ~/furnace
-curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace-image-0.10.0.tar.gz
-curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/docker-compose.yml
-curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/env.example
-sudo docker load -i furnace-image-0.10.0.tar.gz     # "Loaded image: furnace:0.10.0"
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/docker-compose.yml
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/env.example
 mv env.example .env
-ls -la                                                  # .env  docker-compose.yml  furnace-image-0.10.0.tar.gz
+grep FURNACE_VERSION= .env                              # FURNACE_VERSION=0.11.0
+sudo docker compose pull                                # ghcr.io/mahammadrahimov/furnace:0.11.0
 ```
 
-`docker-compose.yml` is the same on both hosts: **never edit it**. Your settings go into `.env`.
+`docker-compose.yml` is the same on both hosts: **never edit it**. Your settings go into `.env`. The image comes from
+GitHub's container registry (public, no login), in the version that `FURNACE_VERSION` in `.env` names.
+
+**No internet on this host?** Download `furnace-image-0.11.0.tar.gz` from the release page on another computer,
+copy it here, then `sudo docker load -i furnace-image-0.11.0.tar.gz` instead of `docker compose pull`.
 
 ### A9. Write the settings file `.env`
 
@@ -202,6 +205,9 @@ nano .env
 Delete what is in it and write (with your own IPs):
 
 ```text
+# The Furnace version (the image ghcr.io/mahammadrahimov/furnace:VERSION). To update: change it.
+FURNACE_VERSION=0.11.0
+
 # The three IPs. This whole file is THE SAME on both hosts.
 FURNACE_LEADER_IP=192.0.2.11
 FURNACE_FOLLOWER_IP=192.0.2.12
@@ -221,6 +227,7 @@ TZ=UTC
 
 | Setting | Meaning |
 |---|---|
+| `FURNACE_VERSION` | the Furnace version; to update later, change it (Part 4) |
 | `FURNACE_LEADER_IP` | host A's own IP |
 | `FURNACE_FOLLOWER_IP` | host B's own IP |
 | `FURNACE_SHARED_IP` | the free shared IP |
@@ -253,7 +260,7 @@ sudo docker logs furnace
 ```
 
 ```text
-furnace: Starting Furnace 0.10.0 (Docker).
+furnace: Starting Furnace 0.11.0 (Docker).
 furnace: This host is the leader (192.0.2.11); the other host is 192.0.2.12.
 furnace: Self-signed certificate made (10 years) for 192.0.2.10, 192.0.2.11, 192.0.2.12.
 furnace: keepalived password made.
@@ -275,7 +282,7 @@ sudo docker exec furnace furnace status
 ```
 
 ```text
-Furnace 0.10.0 (Docker)
+Furnace 0.11.0 (Docker)
 Role:     leader (this host owns the shared IP 192.0.2.10)
 Host:     192.0.2.11 (the leader by setting), other host 192.0.2.12
 
@@ -441,15 +448,16 @@ getenforce
 
 SELinux is **Enforcing** by default on Oracle Linux 9. Keep it as it is. Docker CE runs containers without SELinux labels by default (`selinux-enabled` is off in Docker), so the two folders `config` and `data` need nothing. If you turned SELinux on for Docker in `/etc/docker/daemon.json`, add `:Z` to the two folder lines in `docker-compose.yml`.
 
-### B8. Download Furnace and load the image
+### B8. Download Furnace and the image
 
 ```bash
 mkdir ~/furnace && cd ~/furnace
-curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/furnace-image-0.10.0.tar.gz
-curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.10.0/docker-compose.yml
-sudo docker load -i furnace-image-0.10.0.tar.gz     # "Loaded image: furnace:0.10.0"
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/docker-compose.yml
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/env.example && mv env.example .env       # replaced by host A's .env in the next step
+sudo docker compose pull                                # ghcr.io/mahammadrahimov/furnace:0.11.0
 ```
 
+No internet on this host: load `furnace-image-0.11.0.tar.gz` as on host A.
 ### B9. Copy `.env` from host A and add the join code
 
 Copy host A's `.env` **as it is**. Nothing is swapped: host B finds its role from its own IP.
@@ -480,7 +488,7 @@ sudo docker logs furnace
 ```
 
 ```text
-furnace: Starting Furnace 0.10.0 (Docker).
+furnace: Starting Furnace 0.11.0 (Docker).
 furnace: This host is the follower (192.0.2.12); the other host is 192.0.2.11.
 furnace: Certificate and secrets fetched from the leader 192.0.2.11 with the join code. You can remove FURNACE_JOIN_CODE from .env now (it is used up).
 ...
@@ -528,7 +536,7 @@ sudo docker exec furnace furnace status
 ```
 
 ```text
-Furnace 0.10.0 (Docker)
+Furnace 0.11.0 (Docker)
 Role:     follower (the other host owns the shared IP 192.0.2.10)
 Host:     192.0.2.12 (the follower by setting), other host 192.0.2.11
 
@@ -723,26 +731,60 @@ the container again).
 **Backup:** the leader makes a daily backup in `~/furnace/data/backups`. To be safe from a lost host, copy
 `~/furnace/config` and `~/furnace/data` somewhere else from time to time (`config` is secret).
 
-**Upgrade** to a newer version, on both hosts (the leader first, then the follower; `furnace status` shows which is
-the leader now):
+### Update Furnace
+
+Nothing updates by itself. Once a day the container checks whether a newer version is out (it reads one small
+public file and sends nothing about the host); `sudo docker exec furnace furnace status` then shows a line
+`Updates:  A new version is available: ...`. Each release has notes on the GitHub release page: read them first.
+
+**When there is a new version:** first the host **without** the shared IP (`furnace status` shows the role; after
+a failover that can be host A), then the other one:
 
 ```bash
 cd ~/furnace
-curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/vNEW/furnace-image-NEW.tar.gz
-curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/vNEW/docker-compose.yml        # names the new image; .env stays
-sudo docker load -i furnace-image-NEW.tar.gz
-sudo docker compose up -d
+sed -i 's/^FURNACE_VERSION=.*/FURNACE_VERSION=NEW/' .env
+sudo docker compose pull && sudo docker compose up -d
 ```
 
-The database is updated at start. Data and secrets stay in `config` and `data`. Each release has notes on the
-GitHub release page: read them before you upgrade. Coming from 0.9: an old `.env` with `FURNACE_THIS_IP` /
-`FURNACE_PEER_IP` keeps working; the log suggests the new names (`FURNACE_LEADER_IP`, `FURNACE_FOLLOWER_IP`).
+Before the new version starts, the container copies the database into `~/furnace/data/version-backups/`. When the
+leader stops, it first sends its last changes to the other host, then hands over the shared IP: nothing is lost.
+Data and secrets stay in `config` and `data`.
 
-**Remove Furnace** (on both):
+**Going back:** the old version in `FURNACE_VERSION`, the same two commands (a copy is made too).
+**A host without internet:** load `furnace-image-NEW.tar.gz` (`sudo docker load -i ...`), change `.env`, then
+`sudo docker compose up -d`.
+**No daily check:** `FURNACE_UPDATE_CHECK=false` in `.env` (both hosts), then `sudo docker compose up -d`.
+
+### Coming from 0.9 or 0.10
+
+The update to 0.11.0 changes the two files once: the image now comes from `ghcr.io`, with the version in `.env`.
+First the host without the shared IP, then the other one:
+
+```bash
+cd ~/furnace
+cp docker-compose.yml docker-compose.yml.old
+curl -fLO https://github.com/MahammadRahimov/furnace-releases/releases/download/v0.11.0/docker-compose.yml
+echo FURNACE_VERSION=0.11.0 >> .env
+sudo docker compose pull && sudo docker compose up -d
+```
+
+Two things only this time, because 0.9 and 0.10 do not have them yet:
+- **Before you update the host WITH the shared IP,** pause the changes from your SOAR for a minute (or wait 30
+  seconds after the last change). The old version does not send its last changes before it stops: changes of the
+  last 20 seconds could be lost.
+- **Going back to 0.10 makes no copy by itself.** Make one first (`sudo docker exec furnace furnace backup`, it goes
+  to `~/furnace/data/backups/`), then `mv docker-compose.yml.old docker-compose.yml` and `sudo docker compose up -d`.
+
+Coming from 0.9: an old `.env` with `FURNACE_THIS_IP` / `FURNACE_PEER_IP` keeps working; the log suggests the new
+names (`FURNACE_LEADER_IP`, `FURNACE_FOLLOWER_IP`).
+
+### Remove Furnace
+
+On both hosts:
 
 ```bash
 cd ~/furnace && sudo docker compose down
-sudo docker image rm furnace:0.10.0
+sudo docker image rm ghcr.io/mahammadrahimov/furnace:0.11.0
 # the data stays in ~/furnace/config and ~/furnace/data until you delete the folder
 ```
 
