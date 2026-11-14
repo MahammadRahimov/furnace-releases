@@ -1,0 +1,28 @@
+Package: furnace
+Architecture: all
+Version: 1:0.11.0
+Priority: optional
+Section: net
+Maintainer: Mahammad Rahimov <224394699+MahammadRahimov@users.noreply.github.com>
+Installed-Size: 4688
+Depends: python3 (>= 3.9), nginx, keepalived, openssl,
+ curl, openssh-server, openssh-client, sqlite3, ufw, iproute2, gzip, tar, util-linux, passwd
+Filename: pool/main/f/furnace/furnace_0.11.0_all.deb
+Size: 757784
+MD5sum: da0d956422469677c8e63834f172f396
+SHA1: a636dd65ae3755c6e4e800d64b6a83ab240a1048
+SHA256: 120763a6398a0dfd7c1cd7582b92671bf5f9b03b098970434ca3f258d2b530c3
+SHA512: ca2c2c14f7fd09c8fc7b581d5a5ee15f071fdea7305795f3bcd8fff2e65f04e04eb60a0411a483a7b33161269f534b5fe2b8bd1a6cb6ba7f01fe8073071b5990
+Homepage: https://github.com/MahammadRahimov/furnace-releases
+Description: Blocklist server that publishes IP and domain lists for firewalls
+ Furnace keeps a blocklist of IPs and domains. A SOAR, a script or a UI adds
+ and removes entries through an HTTPS API with a token. A firewall downloads
+ the lists as plain text files (Palo Alto: External Dynamic Lists, EDLs) with
+ a login. Two servers share one IP address with keepalived, and
+ the leader copies its database to the follower every minute.
+ .
+ Flask and gunicorn are bundled inside the package, so it works the same on
+ every supported system.
+ .
+ After the install, run: sudo furnace setup
+

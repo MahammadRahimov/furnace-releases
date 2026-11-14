@@ -1,0 +1,7 @@
+# Furnace (Hollowgate Tech). Put this file into /etc/apt/sources.list.d/ and the key into
+# /usr/share/keyrings/furnace-archive-keyring.gpg (from https://mahammadrahimov.github.io/furnace-releases/furnace-archive-keyring.gpg).
+Types: deb
+URIs: https://mahammadrahimov.github.io/furnace-releases/deb
+Suites: stable
+Components: main
+Signed-By: /usr/share/keyrings/furnace-archive-keyring.gpg

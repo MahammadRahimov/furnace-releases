@@ -1,0 +1,52 @@
+Architectures: amd64 arm64 armhf ppc64el s390x
+Codename: stable
+Components: main
+Date: Sat, 14 Nov 2026 14:39:53 +0000
+Description: Furnace packages by Hollowgate Tech
+Label: Furnace
+Origin: Furnace
+Suite: stable
+MD5Sum:
+ cb73536969f47d785f51f88164f6e143             1351 main/binary-amd64/Packages
+ 4fb4fd1196dfa3095db16e59e9ed90ab              879 main/binary-amd64/Packages.gz
+ cb73536969f47d785f51f88164f6e143             1351 main/binary-arm64/Packages
+ 4fb4fd1196dfa3095db16e59e9ed90ab              879 main/binary-arm64/Packages.gz
+ cb73536969f47d785f51f88164f6e143             1351 main/binary-armhf/Packages
+ 4fb4fd1196dfa3095db16e59e9ed90ab              879 main/binary-armhf/Packages.gz
+ cb73536969f47d785f51f88164f6e143             1351 main/binary-ppc64el/Packages
+ 4fb4fd1196dfa3095db16e59e9ed90ab              879 main/binary-ppc64el/Packages.gz
+ cb73536969f47d785f51f88164f6e143             1351 main/binary-s390x/Packages
+ 4fb4fd1196dfa3095db16e59e9ed90ab              879 main/binary-s390x/Packages.gz
+SHA1:
+ d028dffa9b17152b3d269995342f810b50ffa05e             1351 main/binary-amd64/Packages
+ 8661130f99cb257e4f7ccd0190fe99b8b35a213b              879 main/binary-amd64/Packages.gz
+ d028dffa9b17152b3d269995342f810b50ffa05e             1351 main/binary-arm64/Packages
+ 8661130f99cb257e4f7ccd0190fe99b8b35a213b              879 main/binary-arm64/Packages.gz
+ d028dffa9b17152b3d269995342f810b50ffa05e             1351 main/binary-armhf/Packages
+ 8661130f99cb257e4f7ccd0190fe99b8b35a213b              879 main/binary-armhf/Packages.gz
+ d028dffa9b17152b3d269995342f810b50ffa05e             1351 main/binary-ppc64el/Packages
+ 8661130f99cb257e4f7ccd0190fe99b8b35a213b              879 main/binary-ppc64el/Packages.gz
+ d028dffa9b17152b3d269995342f810b50ffa05e             1351 main/binary-s390x/Packages
+ 8661130f99cb257e4f7ccd0190fe99b8b35a213b              879 main/binary-s390x/Packages.gz
+SHA256:
+ 66e43dd3313f02ce3681fbf6a77d3de2406f29832ea07cd33b15a79a43bfd43e             1351 main/binary-amd64/Packages
+ ae053fcad0bbc06cb6a40f5ac4b4797995c705741ca96a000533838571fc44a2              879 main/binary-amd64/Packages.gz
+ 66e43dd3313f02ce3681fbf6a77d3de2406f29832ea07cd33b15a79a43bfd43e             1351 main/binary-arm64/Packages
+ ae053fcad0bbc06cb6a40f5ac4b4797995c705741ca96a000533838571fc44a2              879 main/binary-arm64/Packages.gz
+ 66e43dd3313f02ce3681fbf6a77d3de2406f29832ea07cd33b15a79a43bfd43e             1351 main/binary-armhf/Packages
+ ae053fcad0bbc06cb6a40f5ac4b4797995c705741ca96a000533838571fc44a2              879 main/binary-armhf/Packages.gz
+ 66e43dd3313f02ce3681fbf6a77d3de2406f29832ea07cd33b15a79a43bfd43e             1351 main/binary-ppc64el/Packages
+ ae053fcad0bbc06cb6a40f5ac4b4797995c705741ca96a000533838571fc44a2              879 main/binary-ppc64el/Packages.gz
+ 66e43dd3313f02ce3681fbf6a77d3de2406f29832ea07cd33b15a79a43bfd43e             1351 main/binary-s390x/Packages
+ ae053fcad0bbc06cb6a40f5ac4b4797995c705741ca96a000533838571fc44a2              879 main/binary-s390x/Packages.gz
+SHA512:
+ ea42104d1532178de26930e1754e8ce949b57d4ef07f72c8a633853f329602e0c9e066673090499c33ffa11d429f26a4065c838bff19ecbf8934af6ba8179dec             1351 main/binary-amd64/Packages
+ ba34c3009d1f976e428237a231cb6eac0b5aab05f8d9b390b78e8c66d114e121b1973b80e19883c0c5b81edc29acc30a113e074712b07a453075a199aaac1529              879 main/binary-amd64/Packages.gz
+ ea42104d1532178de26930e1754e8ce949b57d4ef07f72c8a633853f329602e0c9e066673090499c33ffa11d429f26a4065c838bff19ecbf8934af6ba8179dec             1351 main/binary-arm64/Packages
+ ba34c3009d1f976e428237a231cb6eac0b5aab05f8d9b390b78e8c66d114e121b1973b80e19883c0c5b81edc29acc30a113e074712b07a453075a199aaac1529              879 main/binary-arm64/Packages.gz
+ ea42104d1532178de26930e1754e8ce949b57d4ef07f72c8a633853f329602e0c9e066673090499c33ffa11d429f26a4065c838bff19ecbf8934af6ba8179dec             1351 main/binary-armhf/Packages
+ ba34c3009d1f976e428237a231cb6eac0b5aab05f8d9b390b78e8c66d114e121b1973b80e19883c0c5b81edc29acc30a113e074712b07a453075a199aaac1529              879 main/binary-armhf/Packages.gz
+ ea42104d1532178de26930e1754e8ce949b57d4ef07f72c8a633853f329602e0c9e066673090499c33ffa11d429f26a4065c838bff19ecbf8934af6ba8179dec             1351 main/binary-ppc64el/Packages
+ ba34c3009d1f976e428237a231cb6eac0b5aab05f8d9b390b78e8c66d114e121b1973b80e19883c0c5b81edc29acc30a113e074712b07a453075a199aaac1529              879 main/binary-ppc64el/Packages.gz
+ ea42104d1532178de26930e1754e8ce949b57d4ef07f72c8a633853f329602e0c9e066673090499c33ffa11d429f26a4065c838bff19ecbf8934af6ba8179dec             1351 main/binary-s390x/Packages
+ ba34c3009d1f976e428237a231cb6eac0b5aab05f8d9b390b78e8c66d114e121b1973b80e19883c0c5b81edc29acc30a113e074712b07a453075a199aaac1529              879 main/binary-s390x/Packages.gz

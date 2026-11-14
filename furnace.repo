@@ -1,0 +1,9 @@
+# Furnace (Hollowgate Tech). Put this file into /etc/yum.repos.d/.
+[furnace]
+name=Furnace
+baseurl=https://mahammadrahimov.github.io/furnace-releases/rpm
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://mahammadrahimov.github.io/furnace-releases/RPM-GPG-KEY-furnace
+metadata_expire=6h
